@@ -1,0 +1,47 @@
+---
+# Baseline configuration applied to every VM in the lab.
+# Safe to run repeatedly.
+
+- name: Baseline (all VMs)
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Set timezone to UTC
+      community.general.timezone:
+        name: UTC
+
+    - name: Install common packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - jq
+          - htop
+          - vim
+          - ca-certificates
+          - unattended-upgrades
+          - net-tools
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Disable swap (kubelet doesn't tolerate it)
+      ansible.builtin.shell: |
+        if [ "$(swapon --show)" != "" ]; then
+          swapoff -a
+        fi
+        sed -i.bak '/ swap / s/^[^#]/#&/' /etc/fstab
+      register: swap_result
+      changed_when: "'swap' in swap_result.stdout or swap_result.rc != 0"
+      failed_when: false
+
+    - name: Enable unattended-upgrades for security patches
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+        owner: root
+        group: root
+        mode: '0644'
