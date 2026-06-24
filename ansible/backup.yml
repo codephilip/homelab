@@ -1,0 +1,121 @@
+---
+# Backup VM (backup1): daily Postgres dump → restic repo (encrypted, dedup'd).
+# Off-site sync (rclone to B2/S3/GDrive) is a separate manual step — see end of
+# this file. The cluster *state* doesn't need backing up: it's in this git repo.
+
+- name: Backups on backup1
+  hosts: backup
+  become: true
+  gather_facts: true
+  vars:
+    pg_host: "{{ hostvars['db1'].ansible_host }}"
+    pg_user: appuser
+    pg_db: app
+    pg_password: "{{ lookup('env', 'POSTGRES_APP_PASSWORD') }}"
+    restic_password: "{{ lookup('env', 'RESTIC_PASSWORD') }}"
+    restic_repo: /var/backups/restic
+
+  tasks:
+    - name: Assert secrets are set
+      ansible.builtin.assert:
+        that:
+          - pg_password | length > 0
+          - restic_password | length > 0
+        fail_msg: "POSTGRES_APP_PASSWORD and RESTIC_PASSWORD must both be set"
+
+    - name: Install restic, psql client, rclone
+      ansible.builtin.apt:
+        name:
+          - restic
+          - postgresql-client-16
+          - rclone
+          - cron
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure restic repo directory exists
+      ansible.builtin.file:
+        path: "{{ restic_repo }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Write backup env file (secrets — 0600 root)
+      ansible.builtin.copy:
+        dest: /etc/backup.env
+        owner: root
+        group: root
+        mode: '0600'
+        content: |
+          export RESTIC_REPOSITORY={{ restic_repo }}
+          export RESTIC_PASSWORD={{ restic_password }}
+          export PGPASSWORD={{ pg_password }}
+          export PGHOST={{ pg_host }}
+          export PGUSER={{ pg_user }}
+          export PGDATABASE={{ pg_db }}
+      no_log: true
+
+    - name: Initialize restic repo (idempotent — checks first)
+      ansible.builtin.shell: |
+        set -e
+        . /etc/backup.env
+        if ! restic snapshots >/dev/null 2>&1; then
+          restic init
+        fi
+      register: restic_init
+      changed_when: "'created restic repository' in restic_init.stderr or 'created restic repository' in restic_init.stdout"
+
+    - name: Install backup-postgres script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/backup-postgres.sh
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          . /etc/backup.env
+          STAMP=$(date -u +%FT%H%MZ)
+          DUMP=/tmp/pg-${STAMP}.sql.gz
+          pg_dump | gzip > "$DUMP"
+          restic backup "$DUMP" --tag postgres --host backup1
+          restic forget --prune --keep-daily 7 --keep-weekly 4 --keep-monthly 6
+          rm -f "$DUMP"
+
+    - name: Install daily cron job (03:17 UTC)
+      ansible.builtin.copy:
+        dest: /etc/cron.d/backup-postgres
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Daily Postgres backup
+          17 3 * * * root /usr/local/bin/backup-postgres.sh >> /var/log/backup.log 2>&1
+
+    - name: Run backup once now to seed the repo and verify it works
+      ansible.builtin.command: /usr/local/bin/backup-postgres.sh
+      register: first_backup
+      changed_when: true
+
+    - name: Show snapshot list
+      ansible.builtin.shell: |
+        . /etc/backup.env
+        restic snapshots
+      register: snapshots
+      changed_when: false
+
+    - name: Print restic snapshots
+      ansible.builtin.debug:
+        var: snapshots.stdout_lines
+
+# To add off-site sync later (interactive — needs your provider credentials):
+#
+#   ssh backup1
+#   rclone config            # add a remote, e.g. "b2:homelab-backup"
+#
+# Then append to /etc/cron.d/backup-postgres:
+#
+#   27 3 * * * root . /etc/backup.env && rclone sync /var/backups/restic \
+#              b2:homelab-backup --fast-list >> /var/log/backup.log 2>&1
