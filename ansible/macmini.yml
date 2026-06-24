@@ -36,11 +36,10 @@
         state: present
         path: "{{ brew_path | dirname }}"
 
-    - name: Install Tailscale cask (the official Mac App)
-      community.general.homebrew_cask:
-        name: tailscale-app
-        state: present
-        path: "{{ brew_path | dirname }}"
+    # Skipping cask install via Ansible — pkg installers need sudo password,
+    # which SSH-without-TTY can't provide. Install Tailscale manually:
+    #   https://tailscale.com/download/macos    (or `brew install --cask tailscale-app` on the Mini directly)
+    # Then sign in via the menu-bar app.
 
     # ---- Ollama: bind on all interfaces so apps in k3s (and via Tailscale) can hit it ----
     - name: Set OLLAMA_HOST in launchd (so brew services starts it with 0.0.0.0)
