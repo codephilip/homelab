@@ -22,3 +22,8 @@ export RESTIC_PASSWORD=''
 
 # Grafana admin login. Generate with: openssl rand -base64 18
 export GRAFANA_ADMIN_PASSWORD=''
+
+# GitHub PAT with "Administration: Read and write" on the target repo(s).
+# Used once by ansible/ci.yml to fetch a runner registration token.
+export GITHUB_TOKEN=''
+export GITHUB_REPO=''     # e.g., "codephilip/homelab"

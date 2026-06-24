@@ -1,0 +1,127 @@
+---
+# Self-hosted GitHub Actions runner on ci1.
+# Needs GITHUB_TOKEN (a PAT with admin:write on the target repo) and
+# GITHUB_REPO ("owner/repo").
+
+- name: GitHub Actions runner on ci1
+  hosts: ci
+  become: true
+  gather_facts: true
+  vars:
+    gh_repo: "{{ lookup('env', 'GITHUB_REPO') }}"
+    gh_token: "{{ lookup('env', 'GITHUB_TOKEN') }}"
+    runner_version: "2.319.1"
+    runner_dir: /home/runner/actions-runner
+    runner_labels: "self-hosted,homelab,linux,x64"
+
+  tasks:
+    - name: Assert env vars
+      ansible.builtin.assert:
+        that:
+          - gh_repo | length > 0 and '/' in gh_repo
+          - gh_token | length > 0
+        fail_msg: "GITHUB_REPO ('owner/repo') and GITHUB_TOKEN (PAT) must both be set"
+
+    - name: Install docker + git + build tools
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - git
+          - jq
+          - build-essential
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create runner user
+      ansible.builtin.user:
+        name: runner
+        shell: /bin/bash
+        home: /home/runner
+        groups: docker
+        append: true
+
+    - name: Ensure runner_dir exists
+      ansible.builtin.file:
+        path: "{{ runner_dir }}"
+        state: directory
+        owner: runner
+        group: runner
+        mode: '0755'
+
+    - name: Check if runner is already configured
+      ansible.builtin.stat:
+        path: "{{ runner_dir }}/.runner"
+      register: runner_state
+
+    - name: Download GitHub Actions runner tarball
+      ansible.builtin.get_url:
+        url: "https://github.com/actions/runner/releases/download/v{{ runner_version }}/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+        dest: "{{ runner_dir }}/runner.tar.gz"
+        owner: runner
+        group: runner
+        mode: '0644'
+      when: not runner_state.stat.exists
+
+    - name: Extract runner
+      ansible.builtin.unarchive:
+        src: "{{ runner_dir }}/runner.tar.gz"
+        dest: "{{ runner_dir }}"
+        remote_src: true
+        owner: runner
+        group: runner
+      when: not runner_state.stat.exists
+
+    - name: Fetch registration token from GitHub (delegated — keeps PAT on the laptop)
+      delegate_to: localhost
+      become: false
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ gh_repo }}/actions/runners/registration-token"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ gh_token }}"
+          Accept: "application/vnd.github+json"
+          X-GitHub-Api-Version: "2022-11-28"
+        status_code: 201
+      register: reg_resp
+      when: not runner_state.stat.exists
+      no_log: true
+
+    - name: Configure runner
+      become_user: runner
+      ansible.builtin.command:
+        cmd: >
+          ./config.sh
+          --url https://github.com/{{ gh_repo }}
+          --token {{ reg_resp.json.token }}
+          --name ci1
+          --labels {{ runner_labels }}
+          --unattended
+          --replace
+        chdir: "{{ runner_dir }}"
+      when: not runner_state.stat.exists
+      no_log: true
+
+    - name: Install systemd service
+      ansible.builtin.command:
+        cmd: "./svc.sh install runner"
+        chdir: "{{ runner_dir }}"
+      args:
+        creates: "/etc/systemd/system/actions.runner.{{ gh_repo | replace('/', '-') }}.ci1.service"
+
+    - name: Start and enable runner service
+      ansible.builtin.command:
+        cmd: "./svc.sh start"
+        chdir: "{{ runner_dir }}"
+      changed_when: false
+
+    - name: Verify runner is online
+      ansible.builtin.command:
+        cmd: "./svc.sh status"
+        chdir: "{{ runner_dir }}"
+      register: svc_status
+      changed_when: false
+
+    - name: Show runner status
+      ansible.builtin.debug:
+        var: svc_status.stdout_lines
