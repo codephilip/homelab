@@ -1,0 +1,84 @@
+---
+# Install Tailscale on ts-router and advertise the 10.10.20.0/24 subnet.
+# Requires env var TAILSCALE_AUTHKEY (a reusable pre-auth key from
+# https://login.tailscale.com/admin/settings/keys).
+
+- name: Tailscale subnet router
+  hosts: tailscale_router
+  become: true
+  gather_facts: true
+  vars:
+    tailscale_authkey: "{{ lookup('env', 'TAILSCALE_AUTHKEY') }}"
+    advertise_routes: "10.10.20.0/24"
+
+  tasks:
+    - name: Assert TAILSCALE_AUTHKEY is set
+      ansible.builtin.assert:
+        that: tailscale_authkey | length > 0
+        fail_msg: "TAILSCALE_AUTHKEY env var is empty — generate one at https://login.tailscale.com/admin/settings/keys"
+
+    - name: Add Tailscale APT signing key
+      ansible.builtin.get_url:
+        url: https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg
+        dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+        mode: '0644'
+
+    - name: Add Tailscale APT repo
+      ansible.builtin.get_url:
+        url: https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list
+        dest: /etc/apt/sources.list.d/tailscale.list
+        mode: '0644'
+
+    - name: Install tailscale
+      ansible.builtin.apt:
+        name: tailscale
+        state: present
+        update_cache: true
+
+    - name: Enable IPv4 forwarding (needed for subnet routing)
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        sysctl_set: true
+        state: present
+        sysctl_file: /etc/sysctl.d/99-tailscale.conf
+        reload: true
+
+    - name: Enable IPv6 forwarding
+      ansible.posix.sysctl:
+        name: net.ipv6.conf.all.forwarding
+        value: "1"
+        sysctl_set: true
+        state: present
+        sysctl_file: /etc/sysctl.d/99-tailscale.conf
+        reload: true
+
+    - name: Check current tailscale auth state
+      ansible.builtin.command: tailscale status --json
+      register: ts_status
+      changed_when: false
+      failed_when: false
+
+    - name: Run tailscale up (first auth or re-auth if Stopped/NeedsLogin)
+      ansible.builtin.command: >
+        tailscale up
+        --authkey={{ tailscale_authkey }}
+        --advertise-routes={{ advertise_routes }}
+        --accept-dns=false
+        --ssh
+        --hostname={{ inventory_hostname }}
+      when: >
+        ts_status.rc != 0
+        or '"BackendState":"NoState"' in ts_status.stdout
+        or '"BackendState":"NeedsLogin"' in ts_status.stdout
+        or '"BackendState":"Stopped"' in ts_status.stdout
+      no_log: true
+
+    - name: Fetch the assigned Tailscale IP
+      ansible.builtin.command: tailscale ip -4
+      register: ts_ip
+      changed_when: false
+
+    - name: Print Tailscale IP
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} Tailscale IP: {{ ts_ip.stdout }}"

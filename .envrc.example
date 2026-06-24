@@ -5,3 +5,7 @@ export TF_VAR_proxmox_api_token_prox1='terraform@pve!provisioner=PASTE-UUID-HERE
 export TF_VAR_proxmox_api_token_prox2=''
 export TF_VAR_proxmox_api_token_prox3=''
 export TF_VAR_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"
+
+# Reusable pre-auth key from https://login.tailscale.com/admin/settings/keys
+# Used by ansible/tailscale.yml. Optional unless you're running that playbook.
+export TAILSCALE_AUTHKEY=''
