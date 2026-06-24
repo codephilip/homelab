@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 30s
+  external_labels:
+    cluster: home
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: k3s-kubelet
+    scheme: https
+    tls_config: { insecure_skip_verify: true }
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+{% for ip in k3s_node_ips %}
+          - "{{ ip }}:10250"
+{% endfor %}
+
+  - job_name: node-exporter
+    static_configs:
+      - targets:
+{% for h in groups['all'] %}
+          - "{{ hostvars[h].ansible_host }}:9100"
+{% endfor %}
