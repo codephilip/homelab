@@ -1,0 +1,82 @@
+---
+# Mac Mini setup. Treated as a standalone compute node, not a k3s member.
+# - Ollama (local LLMs) listening on the tailnet so cluster apps can call it
+# - Tailscale (Mac App)
+# - Python research env: pyenv + uv
+# - Common CLI tools
+#
+# Tailscale sign-in is interactive (open the menu-bar app + sign in once).
+# Everything else is fully scripted.
+
+- name: Mac Mini
+  hosts: mac
+  gather_facts: true
+
+  vars:
+    brew_path: >-
+      {{ '/opt/homebrew/bin/brew' if ansible_architecture == 'arm64'
+         else '/usr/local/bin/brew' }}
+
+  tasks:
+    - name: Check homebrew is installed
+      ansible.builtin.command: "{{ brew_path }} --version"
+      register: brew_check
+      changed_when: false
+      failed_when: brew_check.rc != 0
+
+    - name: Install CLI formulae
+      community.general.homebrew:
+        name:
+          - ollama
+          - pyenv
+          - uv
+          - jq
+          - htop
+          - direnv
+        state: present
+        path: "{{ brew_path | dirname }}"
+
+    - name: Install Tailscale cask (the official Mac App)
+      community.general.homebrew_cask:
+        name: tailscale-app
+        state: present
+        path: "{{ brew_path | dirname }}"
+
+    # ---- Ollama: bind on all interfaces so apps in k3s (and via Tailscale) can hit it ----
+    - name: Set OLLAMA_HOST in launchd (so brew services starts it with 0.0.0.0)
+      ansible.builtin.command: launchctl setenv OLLAMA_HOST 0.0.0.0:11434
+      changed_when: false
+
+    - name: Stop ollama service (if running) before applying env
+      ansible.builtin.command: "{{ brew_path }} services stop ollama"
+      changed_when: false
+      failed_when: false
+
+    - name: Start ollama as a brew service
+      ansible.builtin.command: "{{ brew_path }} services start ollama"
+      changed_when: false
+
+    - name: Wait for ollama to be listening
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 11434
+        timeout: 30
+
+    # ---- Final hints ----
+    - name: Next steps
+      ansible.builtin.debug:
+        msg: |
+          ✔ Ollama listening on 0.0.0.0:11434 (test from your laptop:
+              curl http://{{ ansible_host }}:11434/api/tags)
+
+          → Pull a model on the Mini:
+              ssh macmini 'ollama pull llama3.1:8b'
+
+          → Open Tailscale (Applications → Tailscale, or click the menu-bar
+            icon) and sign in to the same tailnet. After that, the Mini will
+            be reachable by name from anywhere on your tailnet.
+
+          → OLLAMA_HOST=0.0.0.0:11434 is set via `launchctl setenv` which
+            persists for this user session but resets on reboot. To make it
+            permanent, add to ~/.zprofile:
+                export OLLAMA_HOST=0.0.0.0:11434

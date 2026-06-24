@@ -2,8 +2,8 @@
 # Baseline configuration applied to every VM in the lab.
 # Safe to run repeatedly.
 
-- name: Baseline (all VMs)
-  hosts: all
+- name: Baseline (all Linux VMs)
+  hosts: linux_vms
   become: true
   gather_facts: true
 

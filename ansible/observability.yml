@@ -104,8 +104,8 @@
 # Install node-exporter on every lab VM so Prometheus has CPU/RAM/disk stats.
 # ----------------------------------------------------------------------------
 
-- name: node-exporter on every lab VM
-  hosts: all
+- name: node-exporter on every Linux VM
+  hosts: linux_vms
   become: true
   gather_facts: false
 

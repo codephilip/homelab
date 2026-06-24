@@ -3,9 +3,6 @@
 # When IPs/hostnames change there, mirror them here.
 
 all:
-  vars:
-    ansible_user: ubuntu
-
   hosts:
     k3s-cp1:   { ansible_host: 10.10.20.110 }
     db1:       { ansible_host: 10.10.20.111 }
@@ -17,8 +14,28 @@ all:
     k3s-w2:    { ansible_host: 10.10.20.130 }
     obs1:      { ansible_host: 10.10.20.131 }
     util1:     { ansible_host: 10.10.20.132 }
+    macmini:
+      ansible_host: 10.10.60.50
+      ansible_user: pg
+      ansible_python_interpreter: /usr/bin/python3
 
   children:
+    linux_vms:
+      vars:
+        ansible_user: ubuntu
+      hosts:
+        k3s-cp1: {}
+        db1: {}
+        ts-router: {}
+        backup1: {}
+        k3s-w1: {}
+        ci1: {}
+        sandbox1: {}
+        k3s-w2: {}
+        obs1: {}
+        util1: {}
+    mac:
+      hosts: { macmini: {} }
     k3s_servers:
       hosts: { k3s-cp1: {} }
     k3s_agents:
