@@ -19,3 +19,6 @@ export LETSENCRYPT_EMAIL=''
 # Strong password for restic encryption. SAVE THIS — needed to restore backups.
 # Generate with: openssl rand -base64 32
 export RESTIC_PASSWORD=''
+
+# Grafana admin login. Generate with: openssl rand -base64 18
+export GRAFANA_ADMIN_PASSWORD=''

@@ -1,0 +1,149 @@
+---
+# Grafana + Prometheus + Loki on obs1 via Docker Compose.
+# Deliberately *outside* k3s so it survives a cluster meltdown — that's when
+# you need graphs most.
+
+- name: Observability stack on obs1
+  hosts: observability
+  become: true
+  gather_facts: true
+  vars:
+    grafana_admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') }}"
+    k3s_node_ips:
+      - "{{ hostvars['k3s-cp1'].ansible_host }}"
+      - "{{ hostvars['k3s-w1'].ansible_host }}"
+      - "{{ hostvars['k3s-w2'].ansible_host }}"
+
+  tasks:
+    - name: Assert GRAFANA_ADMIN_PASSWORD set
+      ansible.builtin.assert:
+        that: grafana_admin_password | length > 0
+        fail_msg: "GRAFANA_ADMIN_PASSWORD env var is empty"
+
+    - name: Install docker + compose plugin
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-compose-v2
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure docker is running
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create /opt/obs
+      ansible.builtin.file:
+        path: /opt/obs
+        state: directory
+        mode: '0755'
+
+    - name: Write docker-compose.yml
+      ansible.builtin.copy:
+        dest: /opt/obs/docker-compose.yml
+        mode: '0644'
+        content: |
+          services:
+            prometheus:
+              image: prom/prometheus:latest
+              restart: unless-stopped
+              ports: ["9090:9090"]
+              volumes:
+                - ./prometheus.yml:/etc/prometheus/prometheus.yml
+                - prom-data:/prometheus
+              command:
+                - --config.file=/etc/prometheus/prometheus.yml
+                - --storage.tsdb.path=/prometheus
+                - --storage.tsdb.retention.time=30d
+
+            loki:
+              image: grafana/loki:latest
+              restart: unless-stopped
+              ports: ["3100:3100"]
+              volumes: [loki-data:/loki]
+
+            grafana:
+              image: grafana/grafana:latest
+              restart: unless-stopped
+              ports: ["3000:3000"]
+              environment:
+                GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
+                GF_USERS_ALLOW_SIGN_UP: "false"
+              volumes: [grafana-data:/var/lib/grafana]
+
+          volumes:
+            prom-data: {}
+            loki-data: {}
+            grafana-data: {}
+      no_log: true
+
+    - name: Write prometheus.yml
+      ansible.builtin.copy:
+        dest: /opt/obs/prometheus.yml
+        mode: '0644'
+        content: |
+          global:
+            scrape_interval: 30s
+            external_labels: { cluster: home }
+
+          scrape_configs:
+            - job_name: prometheus
+              static_configs:
+                - targets: ['localhost:9090']
+
+            - job_name: k3s-kubelet
+              scheme: https
+              tls_config: { insecure_skip_verify: true }
+              metrics_path: /metrics
+              static_configs:
+                - targets:
+{% for ip in k3s_node_ips %}
+                    - {{ ip }}:10250
+{% endfor %}
+
+            - job_name: node-exporter
+              static_configs:
+                - targets:
+{% for h in groups['all'] %}
+                    - {{ hostvars[h].ansible_host }}:9100
+{% endfor %}
+
+    - name: Bring up the stack
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: /opt/obs
+      register: compose_up
+      changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr"
+
+    - name: Print Grafana URL
+      ansible.builtin.debug:
+        msg: |
+          Grafana: http://{{ ansible_host }}:3000
+            user:  admin
+            pass:  (your GRAFANA_ADMIN_PASSWORD env var)
+
+# ----------------------------------------------------------------------------
+# Install node-exporter on every lab VM so Prometheus has CPU/RAM/disk stats.
+# ----------------------------------------------------------------------------
+
+- name: node-exporter on every lab VM
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Install prometheus-node-exporter
+      ansible.builtin.apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure node-exporter is running
+      ansible.builtin.service:
+        name: prometheus-node-exporter
+        state: started
+        enabled: true
