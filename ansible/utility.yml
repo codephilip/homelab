@@ -1,0 +1,102 @@
+---
+# Utility VM (util1): AdGuard Home as local DNS + ad blocker.
+# Final touches (admin password, filters, custom hostnames) happen in the
+# browser wizard — those settings are too varied to bake in declaratively
+# without a full templated config.
+
+- name: AdGuard Home on util1
+  hosts: utility
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Install docker
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-compose-v2
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure docker is running
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Stop systemd-resolved's stub listener on 53 (it conflicts with AdGuard)
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/no-stub.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Resolve]
+          DNSStubListener=no
+      register: stub_off
+      notify: restart resolved
+
+    - name: Replace /etc/resolv.conf with a real upstream while we install (avoids loop)
+      ansible.builtin.copy:
+        dest: /etc/resolv.conf
+        force: true
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          nameserver 1.1.1.1
+          nameserver 9.9.9.9
+      when: stub_off.changed
+
+    - name: Apply resolved changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Create /opt/adguard
+      ansible.builtin.file:
+        path: /opt/adguard
+        state: directory
+        mode: '0755'
+
+    - name: Write docker-compose.yml
+      ansible.builtin.copy:
+        dest: /opt/adguard/docker-compose.yml
+        mode: '0644'
+        content: |
+          services:
+            adguard:
+              image: adguard/adguardhome:latest
+              restart: unless-stopped
+              network_mode: host
+              volumes:
+                - ./workdir:/opt/adguardhome/work
+                - ./confdir:/opt/adguardhome/conf
+
+    - name: Bring up AdGuard
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: /opt/adguard
+      register: compose_up
+      changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr"
+
+    - name: Setup instructions
+      ansible.builtin.debug:
+        msg: |
+          AdGuard Home is running.
+
+          1) Open the setup wizard:    http://{{ ansible_host }}:3000
+          2) Pick admin web port:      8080  (NOT 80 — keeps it out of the way)
+          3) Pick DNS port:            53
+          4) Set admin password (save in your manager)
+          5) Skip filter list selection (defaults are fine)
+          6) Finish wizard
+
+          Then in UniFi Console → Networks → SERVERS → DHCP → DNS Server:
+            primary: {{ ansible_host }}
+            secondary: 1.1.1.1 (fallback)
+
+  handlers:
+    - name: restart resolved
+      ansible.builtin.service:
+        name: systemd-resolved
+        state: restarted
