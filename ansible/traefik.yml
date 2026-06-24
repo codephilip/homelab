@@ -41,11 +41,26 @@
         --kubeconfig {{ kubeconfig }}
         --namespace kube-system
         --set service.type=LoadBalancer
-        --set ports.web.redirections.entryPoint.to=websecure
-        --set ports.web.redirections.entryPoint.scheme=https
-        --set ports.web.redirections.entryPoint.permanent=true
       register: traefik_helm
       changed_when: "'STATUS: deployed' in traefik_helm.stdout"
+
+    # The Helm chart's schema for redirect config keeps shifting between major
+    # versions. We do the HTTP→HTTPS redirect as a Traefik Middleware below
+    # — it's more idiomatic anyway (per-route control instead of global).
+    - name: Apply HTTP→HTTPS redirect Middleware
+      ansible.builtin.shell: |
+        cat <<'YAML' | kubectl --kubeconfig={{ kubeconfig }} apply -f -
+        apiVersion: traefik.io/v1alpha1
+        kind: Middleware
+        metadata:
+          name: redirect-to-https
+          namespace: kube-system
+        spec:
+          redirectScheme:
+            scheme: https
+            permanent: true
+        YAML
+      changed_when: false
 
     # ---- cert-manager ----
     - name: Install cert-manager
