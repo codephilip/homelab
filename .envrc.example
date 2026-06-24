@@ -12,3 +12,6 @@ export TAILSCALE_AUTHKEY=''
 
 # Postgres app-user password. Generate with: openssl rand -base64 24
 export POSTGRES_APP_PASSWORD=''
+
+# Real email — Let's Encrypt uses this for cert expiry warnings
+export LETSENCRYPT_EMAIL=''

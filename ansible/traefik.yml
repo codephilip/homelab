@@ -1,0 +1,126 @@
+---
+# Install Traefik as the ingress controller (we disabled k3s's bundled one
+# during cluster install). Install cert-manager + a Let's Encrypt
+# ClusterIssuer so Ingress objects can auto-issue TLS certs.
+#
+# Requires: helm CLI on the local Mac, LETSENCRYPT_EMAIL env var.
+
+- name: Traefik + cert-manager
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kubeconfig: "{{ playbook_dir }}/../.kube/home.yaml"
+    le_email: "{{ lookup('env', 'LETSENCRYPT_EMAIL') }}"
+
+  tasks:
+    - name: Assert LETSENCRYPT_EMAIL is set
+      ansible.builtin.assert:
+        that: le_email | length > 0 and '@' in le_email
+        fail_msg: "LETSENCRYPT_EMAIL env var must be a real email address"
+
+    - name: Add traefik helm repo
+      ansible.builtin.command: helm repo add traefik https://traefik.github.io/charts
+      register: repo_traefik
+      changed_when: "'has been added' in repo_traefik.stdout"
+      failed_when: repo_traefik.rc != 0 and 'already exists' not in repo_traefik.stderr
+
+    - name: Add jetstack helm repo (cert-manager)
+      ansible.builtin.command: helm repo add jetstack https://charts.jetstack.io
+      register: repo_jetstack
+      changed_when: "'has been added' in repo_jetstack.stdout"
+      failed_when: repo_jetstack.rc != 0 and 'already exists' not in repo_jetstack.stderr
+
+    - name: helm repo update
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    # ---- Traefik ----
+    - name: Install Traefik
+      ansible.builtin.command: >
+        helm upgrade --install traefik traefik/traefik
+        --kubeconfig {{ kubeconfig }}
+        --namespace kube-system
+        --set service.type=LoadBalancer
+        --set ports.web.redirectTo.port=websecure
+      register: traefik_helm
+      changed_when: "'STATUS: deployed' in traefik_helm.stdout"
+
+    # ---- cert-manager ----
+    - name: Install cert-manager
+      ansible.builtin.command: >
+        helm upgrade --install cert-manager jetstack/cert-manager
+        --kubeconfig {{ kubeconfig }}
+        --namespace cert-manager --create-namespace
+        --set installCRDs=true
+      register: cm_helm
+      changed_when: "'STATUS: deployed' in cm_helm.stdout"
+
+    - name: Wait for cert-manager webhook to be ready
+      ansible.builtin.command: >
+        kubectl --kubeconfig {{ kubeconfig }}
+        -n cert-manager rollout status deploy/cert-manager-webhook --timeout=90s
+      changed_when: false
+
+    # ---- ClusterIssuers ----
+    - name: Apply Let's Encrypt staging ClusterIssuer
+      ansible.builtin.shell: |
+        cat <<'YAML' | kubectl --kubeconfig={{ kubeconfig }} apply -f -
+        apiVersion: cert-manager.io/v1
+        kind: ClusterIssuer
+        metadata:
+          name: letsencrypt-staging
+        spec:
+          acme:
+            server: https://acme-staging-v02.api.letsencrypt.org/directory
+            email: {{ le_email }}
+            privateKeySecretRef:
+              name: letsencrypt-staging-key
+            solvers:
+              - http01:
+                  ingress:
+                    class: traefik
+        YAML
+      changed_when: false
+
+    - name: Apply Let's Encrypt prod ClusterIssuer
+      ansible.builtin.shell: |
+        cat <<'YAML' | kubectl --kubeconfig={{ kubeconfig }} apply -f -
+        apiVersion: cert-manager.io/v1
+        kind: ClusterIssuer
+        metadata:
+          name: letsencrypt
+        spec:
+          acme:
+            server: https://acme-v02.api.letsencrypt.org/directory
+            email: {{ le_email }}
+            privateKeySecretRef:
+              name: letsencrypt-key
+            solvers:
+              - http01:
+                  ingress:
+                    class: traefik
+        YAML
+      changed_when: false
+
+    # ---- Summary ----
+    - name: Get Traefik Service (note the EXTERNAL-IPs — those are the worker node IPs you can publish to)
+      ansible.builtin.command: >
+        kubectl --kubeconfig {{ kubeconfig }}
+        -n kube-system get svc traefik
+      register: traefik_svc
+      changed_when: false
+
+    - name: Show Traefik Service
+      ansible.builtin.debug:
+        var: traefik_svc.stdout_lines
+
+    - name: Get ClusterIssuers
+      ansible.builtin.command: >
+        kubectl --kubeconfig {{ kubeconfig }}
+        get clusterissuers
+      register: issuers
+      changed_when: false
+
+    - name: Show ClusterIssuers
+      ansible.builtin.debug:
+        var: issuers.stdout_lines
