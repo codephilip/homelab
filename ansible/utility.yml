@@ -25,6 +25,14 @@
         state: started
         enabled: true
 
+    - name: Ensure /etc/systemd/resolved.conf.d exists
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
     - name: Stop systemd-resolved's stub listener on 53 (it conflicts with AdGuard)
       ansible.builtin.copy:
         dest: /etc/systemd/resolved.conf.d/no-stub.conf
