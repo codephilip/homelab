@@ -1,0 +1,143 @@
+---
+# Install Postgres 16 on db1, configure it to accept connections from the
+# 10.10.20.0/24 lab subnet, create an "app" database owned by "appuser",
+# then expose it inside the k3s cluster as a Service so apps can use the
+# DNS name `postgres.prod.svc` instead of an IP.
+#
+# Requires POSTGRES_APP_PASSWORD in env. Generate with: openssl rand -base64 24
+
+- name: Postgres on db1
+  hosts: db
+  become: true
+  gather_facts: true
+  vars:
+    pg_version: 16
+    app_db_name: app
+    app_db_user: appuser
+    app_db_password: "{{ lookup('env', 'POSTGRES_APP_PASSWORD') }}"
+    allow_cidr: "10.10.20.0/24"
+
+  tasks:
+    - name: Assert POSTGRES_APP_PASSWORD is set
+      ansible.builtin.assert:
+        that: app_db_password | length > 0
+        fail_msg: "POSTGRES_APP_PASSWORD env var is empty"
+
+    - name: Install postgres + ansible's psycopg2 driver
+      ansible.builtin.apt:
+        name:
+          - "postgresql-{{ pg_version }}"
+          - "postgresql-contrib-{{ pg_version }}"
+          - python3-psycopg2
+        state: present
+        update_cache: true
+
+    - name: Listen on all interfaces
+      ansible.builtin.lineinfile:
+        path: "/etc/postgresql/{{ pg_version }}/main/postgresql.conf"
+        regexp: "^#?listen_addresses"
+        line: "listen_addresses = '*'"
+      notify: restart postgres
+
+    - name: Allow lab subnet in pg_hba.conf
+      ansible.builtin.lineinfile:
+        path: "/etc/postgresql/{{ pg_version }}/main/pg_hba.conf"
+        line: "host    all    all    {{ allow_cidr }}    scram-sha-256"
+        state: present
+      notify: restart postgres
+
+    - name: Ensure postgresql is started and enabled
+      ansible.builtin.service:
+        name: postgresql
+        state: started
+        enabled: true
+
+    - name: Apply pending restart (in case handlers haven't run yet)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Create app role
+      become_user: postgres
+      community.postgresql.postgresql_user:
+        name: "{{ app_db_user }}"
+        password: "{{ app_db_password }}"
+        state: present
+
+    - name: Create app database
+      become_user: postgres
+      community.postgresql.postgresql_db:
+        name: "{{ app_db_name }}"
+        owner: "{{ app_db_user }}"
+        state: present
+
+  handlers:
+    - name: restart postgres
+      ansible.builtin.service:
+        name: postgresql
+        state: restarted
+
+# ----------------------------------------------------------------------------
+# Expose db1 inside k3s so apps reach it as postgres.prod.svc:5432
+# ----------------------------------------------------------------------------
+
+- name: Wire Postgres into k3s
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kubeconfig: "{{ playbook_dir }}/../.kube/home.yaml"
+    app_db_name: app
+    app_db_user: appuser
+    app_db_password: "{{ lookup('env', 'POSTGRES_APP_PASSWORD') }}"
+    db_host_ip: "{{ hostvars['db1'].ansible_host }}"
+
+  tasks:
+    - name: Create prod namespace
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig }}
+        create namespace prod --dry-run=client -o yaml
+      register: ns_yaml
+      changed_when: false
+
+    - name: Apply prod namespace
+      ansible.builtin.shell: |
+        echo '{{ ns_yaml.stdout }}' | kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      changed_when: false
+
+    - name: Apply Postgres Service (ExternalName → db1)
+      ansible.builtin.shell: |
+        cat <<'YAML' | kubectl --kubeconfig={{ kubeconfig }} apply -f -
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: postgres
+          namespace: prod
+        spec:
+          type: ExternalName
+          externalName: {{ db_host_ip }}
+          ports:
+            - port: 5432
+              targetPort: 5432
+        YAML
+      changed_when: false
+
+    - name: Apply Postgres credentials Secret (postgres-app)
+      ansible.builtin.shell: |
+        kubectl --kubeconfig={{ kubeconfig }} -n prod create secret generic postgres-app \
+          --from-literal=POSTGRES_HOST={{ db_host_ip }} \
+          --from-literal=POSTGRES_PORT=5432 \
+          --from-literal=POSTGRES_DB={{ app_db_name }} \
+          --from-literal=POSTGRES_USER={{ app_db_user }} \
+          --from-literal=POSTGRES_PASSWORD={{ app_db_password }} \
+          --from-literal=DATABASE_URL=postgres://{{ app_db_user }}:{{ app_db_password }}@{{ db_host_ip }}:5432/{{ app_db_name }} \
+          --dry-run=client -o yaml | kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      no_log: true
+      changed_when: false
+
+    - name: Show what was created
+      ansible.builtin.shell: |
+        kubectl --kubeconfig={{ kubeconfig }} -n prod get svc,secret
+      changed_when: false
+      register: prod_objects
+
+    - name: Print prod namespace objects
+      ansible.builtin.debug:
+        var: prod_objects.stdout_lines
