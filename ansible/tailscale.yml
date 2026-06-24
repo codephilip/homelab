@@ -53,13 +53,20 @@
         sysctl_file: /etc/sysctl.d/99-tailscale.conf
         reload: true
 
-    - name: Check current tailscale auth state
+    - name: Check current tailscale state
       ansible.builtin.command: tailscale status --json
       register: ts_status
       changed_when: false
       failed_when: false
 
-    - name: Run tailscale up (first auth or re-auth if Stopped/NeedsLogin)
+    - name: Parse BackendState
+      ansible.builtin.set_fact:
+        ts_backend_state: >-
+          {{ (ts_status.stdout | from_json).BackendState
+             if ts_status.rc == 0 and ts_status.stdout | length > 0
+             else 'Unknown' }}
+
+    - name: Run tailscale up (auth + advertise routes)
       ansible.builtin.command: >
         tailscale up
         --authkey={{ tailscale_authkey }}
@@ -67,11 +74,7 @@
         --accept-dns=false
         --ssh
         --hostname={{ inventory_hostname }}
-      when: >
-        ts_status.rc != 0
-        or '"BackendState":"NoState"' in ts_status.stdout
-        or '"BackendState":"NeedsLogin"' in ts_status.stdout
-        or '"BackendState":"Stopped"' in ts_status.stdout
+      when: ts_backend_state in ['NoState', 'NeedsLogin', 'Stopped', 'Unknown']
       no_log: true
 
     - name: Fetch the assigned Tailscale IP
