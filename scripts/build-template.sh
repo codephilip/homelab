@@ -32,6 +32,7 @@ if [[ ! -f "${IMG}" ]]; then
   wget -q --show-progress "${URL}"
 fi
 
+apt-get update >/dev/null
 apt-get -y install libguestfs-tools >/dev/null
 virt-customize -a "${IMG}" --install qemu-guest-agent
 virt-customize -a "${IMG}" --run-command 'systemctl enable qemu-guest-agent'
