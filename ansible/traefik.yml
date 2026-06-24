@@ -41,7 +41,9 @@
         --kubeconfig {{ kubeconfig }}
         --namespace kube-system
         --set service.type=LoadBalancer
-        --set ports.web.redirectTo.port=websecure
+        --set ports.web.redirections.entryPoint.to=websecure
+        --set ports.web.redirections.entryPoint.scheme=https
+        --set ports.web.redirections.entryPoint.permanent=true
       register: traefik_helm
       changed_when: "'STATUS: deployed' in traefik_helm.stdout"
 
