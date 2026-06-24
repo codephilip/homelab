@@ -1,0 +1,26 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Ansible
+*.retry
+ansible/.vault_pass
+ansible/inventory.d/*.local
+
+# Secrets / local
+.env
+.envrc
+.envrc.local
+secrets/
+
+# OS noise
+.DS_Store
