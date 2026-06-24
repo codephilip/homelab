@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Homelab Architecture</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+  html { font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 11pt; color: #1a1a1a; line-height: 1.5; }
+  body { margin: 0; }
+  h1 { font-size: 22pt; margin: 0 0 6pt 0; color: #1e3a8a; }
+  h2 { font-size: 14pt; margin: 18pt 0 6pt 0; color: #1e40af; border-bottom: 1pt solid #c7d2fe; padding-bottom: 3pt; page-break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 12pt 0 3pt 0; color: #4338ca; page-break-after: avoid; }
+  p, ul, ol, table { margin: 5pt 0 7pt 0; }
+  ul, ol { padding-left: 18pt; }
+  li { margin: 2pt 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9.5pt; background: #f1f5f9; padding: 1px 4px; border-radius: 3px; color: #0f172a; }
+  .cover { padding: 20pt 0 0 0; border-bottom: 2pt solid #1e3a8a; margin-bottom: 14pt; }
+  .cover .sub { color: #475569; font-size: 12pt; margin-top: 4pt; }
+  .cover .meta { color: #64748b; font-size: 10pt; margin-top: 12pt; }
+  .hero { margin: 14pt 0; text-align: center; page-break-inside: avoid; }
+  .hero img { max-width: 100%; height: auto; border: 1pt solid #e2e8f0; border-radius: 6pt; }
+  .hero .caption { font-size: 9.5pt; color: #64748b; margin-top: 4pt; }
+  .callout { border-left: 3pt solid #3b82f6; background: #eff6ff; padding: 6pt 10pt; margin: 8pt 0; border-radius: 0 4pt 4pt 0; }
+  .callout.warn { border-left-color: #f59e0b; background: #fffbeb; }
+  .callout.ok { border-left-color: #10b981; background: #ecfdf5; }
+  .callout strong { color: #1d4ed8; }
+  .callout.warn strong { color: #92400e; }
+  .callout.ok strong { color: #047857; }
+  table { border-collapse: collapse; width: 100%; font-size: 10pt; page-break-inside: avoid; }
+  th, td { border: 1pt solid #cbd5e1; padding: 5pt 7pt; vertical-align: top; text-align: left; }
+  th { background: #e0e7ff; color: #1e3a8a; }
+  .vlan-10 { background: #dcfce7; }
+  .vlan-20 { background: #dbeafe; }
+  .vlan-30 { background: #fef3c7; }
+  .vlan-40 { background: #ede9fe; }
+  .vlan-60 { background: #fce7f3; }
+  .phase { page-break-before: always; }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 14pt; margin-top: 8pt; }
+  .twocol .card { border: 1pt solid #e2e8f0; border-radius: 6pt; padding: 10pt 12pt; background: #fafbff; page-break-inside: avoid; }
+  .twocol .card h3 { margin-top: 0; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Homelab Architecture</h1>
+  <div class="sub">Executive overview · system layers, network, IP plan, security</div>
+  <div class="meta">High-level reference document. For operations / rebuild instructions, see the Runbook.</div>
+</div>
+
+<h2>Summary</h2>
+<p>A small but production-shaped homelab on four mini PCs. Three HP EliteDesks run Proxmox VE; on them sit ten Ubuntu VMs that together form a k3s Kubernetes cluster (one control plane, two workers) plus single-purpose VMs for Postgres, ingress, observability, CI, and backups. A Mac Mini sits beside the cluster as a standalone AI / build node. Remote access is exclusively via <strong>Tailscale</strong>; the lab keeps the same <code>10.10.20.x</code> IP plan whether it's at home or plugged into Airbnb Wi-Fi on the road.</p>
+
+<p>Everything above the hardware layer is declarative and lives in <code>codephilip/homelab</code> on GitHub. Rebuilding the entire stack from scratch is a handful of commands documented in the Runbook.</p>
+
+<div class="callout ok"><strong>Design principles.</strong> Declarative wherever possible. Small, separate playbooks per concern. One source of truth (<code>terraform/locals.tf</code>) for the IP / sizing plan. Standalone Proxmox hosts; clustering happens at the workload layer (k3s), not the hypervisor. No public ports except the few apps that need them.</p></div>
+
+<h2 class="phase">1. System stack</h2>
+
+<div class="hero">
+  <img src="images/stack.png" alt="System stack layers">
+  <div class="caption">Five layers. Each abstracts the one below. Only layers 1–2 are out-of-band; everything else is Git-tracked.</div>
+</div>
+
+<table>
+  <tr><th>Layer</th><th>What it is</th><th>Where it lives</th></tr>
+  <tr><td>1 · Hardware</td><td>3× HP EliteDesk + Mac Mini + UniFi gear</td><td>Physical rack</td></tr>
+  <tr><td>2 · Hypervisor</td><td>Proxmox VE 8, three standalone hosts</td><td>Manual install once; bootstrap scripts in repo</td></tr>
+  <tr><td>3 · Virtual machines</td><td>10 Ubuntu 24.04 VMs cloned from one cloud-init template</td><td><code>terraform/</code></td></tr>
+  <tr><td>4 · Cluster</td><td>k3s — 1 control plane + 2 worker VMs forming one cluster</td><td><code>ansible/k3s.yml</code></td></tr>
+  <tr><td>5 · Workloads</td><td>Apps, ingress, cert-manager, observability, etc.</td><td><code>deploy/</code> + remaining playbooks</td></tr>
+</table>
+
+<h2 class="phase">2. Network topology</h2>
+
+<div class="hero">
+  <img src="images/network.png" alt="Network topology">
+  <div class="caption">Two parallel networks behind one internet uplink. Lab is portable — same IPs anywhere.</div>
+</div>
+
+<h3>Two-network design</h3>
+
+<div class="twocol">
+  <div class="card">
+    <h3>Home network (Spectrum)</h3>
+    <p><strong>Subnet:</strong> 192.168.1.0/24<br>
+    <strong>Router:</strong> Spectrum modem+router (not replaced)<br>
+    <strong>WiFi:</strong> the Spectrum router's built-in WiFi<br>
+    <strong>For:</strong> family devices, TVs, IoT<br>
+    <strong>Why separate:</strong> if the lab is down, family WiFi keeps working. We never touch this network.</p>
+  </div>
+  <div class="card">
+    <h3>Lab network (UniFi)</h3>
+    <p><strong>Subnet:</strong> 10.10.0.0/16 split into VLANs<br>
+    <strong>Router:</strong> UniFi Cloud Gateway Max (WAN to Spectrum)<br>
+    <strong>Switch:</strong> UniFi Managed Switch (VLAN-aware)<br>
+    <strong>WiFi:</strong> Nighthawk Mesh in AP mode, trunk-attached to switch<br>
+    <strong>For:</strong> all lab compute. Isolated, portable, fully under our control.</p>
+  </div>
+</div>
+
+<p>This is double-NAT (Spectrum + UniFi). We accept that cost in exchange for (a) family/lab isolation, (b) total portability — pack the whole rack into a suitcase, plug into any upstream, same IPs and apps come up — and (c) zero dependence on Spectrum router config.</p>
+
+<h2 class="phase">3. IP &amp; VLAN organization</h2>
+
+<h3>VLANs</h3>
+<table>
+  <tr><th>VLAN</th><th>Name</th><th>Subnet</th><th>Purpose</th></tr>
+  <tr class="vlan-10"><td>10</td><td>LAN (Trusted)</td><td>10.10.10.0/24 (varies in practice)</td><td>Personal laptops, phones</td></tr>
+  <tr class="vlan-20"><td>20</td><td>SERVERS</td><td>10.10.20.0/24</td><td>Proxmox hosts + 10 lab VMs</td></tr>
+  <tr class="vlan-30"><td>30</td><td>IoT</td><td>10.10.30.0/24</td><td>Lab-side IoT, isolated from servers</td></tr>
+  <tr class="vlan-40"><td>40</td><td>GUEST</td><td>10.10.40.0/24</td><td>Visitors — internet only</td></tr>
+  <tr class="vlan-60"><td>60</td><td>AI</td><td>10.10.60.0/24</td><td>Mac Mini lives here (Ollama, builds, AI workloads)</td></tr>
+</table>
+
+<h3>VLAN 20 IP allocation rule</h3>
+<p>Single, memorable pattern: <strong>hosts at <code>.10N</code>; VMs on host <code>prox-N</code> are in <code>.1N0–.1N9</code></strong>.</p>
+
+<table>
+  <tr><th>Device</th><th>Hostname</th><th>IP</th></tr>
+  <tr><td>UniFi Gateway</td><td>—</td><td>10.10.20.1</td></tr>
+  <tr><td>EliteDesk #1 (Proxmox)</td><td>prox-1</td><td>10.10.20.101</td></tr>
+  <tr><td>EliteDesk #2 (Proxmox)</td><td>prox-2</td><td>10.10.20.102</td></tr>
+  <tr><td>EliteDesk #3 (Proxmox)</td><td>prox-3</td><td>10.10.20.103</td></tr>
+  <tr><td>k3s control plane (on prox-1)</td><td>k3s-cp1</td><td>10.10.20.110</td></tr>
+  <tr><td>Postgres (on prox-1)</td><td>db1</td><td>10.10.20.111</td></tr>
+  <tr><td>Tailscale subnet router (on prox-1)</td><td>ts-router</td><td>10.10.20.112</td></tr>
+  <tr><td>Backup VM (on prox-1)</td><td>backup1</td><td>10.10.20.113</td></tr>
+  <tr><td>k3s worker (on prox-2)</td><td>k3s-w1</td><td>10.10.20.120</td></tr>
+  <tr><td>CI runner (on prox-2)</td><td>ci1</td><td>10.10.20.121</td></tr>
+  <tr><td>Sandbox (on prox-2)</td><td>sandbox1</td><td>10.10.20.122</td></tr>
+  <tr><td>k3s worker (on prox-3)</td><td>k3s-w2</td><td>10.10.20.130</td></tr>
+  <tr><td>Observability (on prox-3)</td><td>obs1</td><td>10.10.20.131</td></tr>
+  <tr><td>Utility / AdGuard (on prox-3)</td><td>util1</td><td>10.10.20.132</td></tr>
+</table>
+<p><em>Mac Mini lives at 10.10.60.50 (DHCP on VLAN 60, AI domain).</em></p>
+
+<h2 class="phase">4. Security &amp; access</h2>
+
+<div class="hero">
+  <img src="images/security.png" alt="Access and security boundaries">
+  <div class="caption">Two paths in: Tailscale (admin) and explicitly forwarded ports (apps). Everything else denied at the UniFi firewall.</div>
+</div>
+
+<h3>Inter-VLAN firewall (default rules)</h3>
+<ul>
+  <li><strong>LAN → SERVERS:</strong> allowed (admin path)</li>
+  <li><strong>SERVERS → Internet:</strong> allowed (apps need outbound)</li>
+  <li><strong>IoT → anything internal:</strong> denied</li>
+  <li><strong>GUEST → anything internal:</strong> denied (internet only)</li>
+  <li>The principle: trusted-may-reach-less-trusted, never the reverse.</li>
+</ul>
+
+<h3>Remote access — Tailscale</h3>
+<p>A single VM (<code>ts-router</code>) advertises <code>10.10.20.0/24</code> into our tailnet. Personal devices (laptop, phone, Mac Mini) join the same tailnet. Result: from anywhere in the world, <code>ssh ubuntu@10.10.20.110</code> just works — and we never opened a public SSH port to do it. Tailscale uses NAT-traversal and end-to-end encryption (WireGuard), so even the double-NAT topology is invisible to the user.</p>
+
+<h3>Public-facing apps</h3>
+<p>Only services that explicitly need to be on the public internet are forwarded — typically just ports 80/443 from the UniFi gateway to <code>k3s-w1</code> (which hosts Traefik). Everything else (Proxmox UIs, Grafana, AdGuard admin, etc.) is reachable only via Tailscale.</p>
+
+<h3>TLS</h3>
+<p>cert-manager + Let's Encrypt issue real certs for any public host via the <code>letsencrypt</code> ClusterIssuer (and <code>letsencrypt-staging</code> for testing). Apps opt in with an annotation on their Ingress. Internal-only services skip TLS or use self-signed.</p>
+
+<h3>Secrets management</h3>
+<ul>
+  <li>All secrets live in <code>~/homelab/.envrc</code> on the operator's Mac — <strong>never committed</strong> (gitignored)</li>
+  <li>Postgres credentials propagate to the cluster as a single k8s Secret (<code>postgres-app</code> in <code>prod</code> namespace) which apps mount as env vars</li>
+  <li>Backups are encrypted (restic + a 32-char passphrase); the passphrase is required to restore — losing it means losing the backups</li>
+</ul>
+
+<h2 class="phase">5. Key design decisions</h2>
+
+<table>
+  <tr><th>Decision</th><th>Why</th></tr>
+  <tr><td>Three standalone Proxmox hosts, no Proxmox cluster</td><td>Clustering happens at k3s where workloads actually need it. Proxmox HA adds quorum / corosync / shared-storage assumptions we don't need.</td></tr>
+  <tr><td>k3s, not full Kubernetes</td><td>Single binary, runs in &lt;512 MB RAM, perfect for small clusters. Same API as upstream k8s.</td></tr>
+  <tr><td>Single k3s control plane (no HA)</td><td>Two more control plane VMs to gain ~5 min/year of resilience isn't worth the complexity for a homelab.</td></tr>
+  <tr><td>Postgres outside k3s on its own VM</td><td>Database state shouldn't be subject to cluster lifecycle. Easier to back up, easier to reason about.</td></tr>
+  <tr><td>Observability outside k3s (Docker Compose on obs1)</td><td>When the cluster catches fire is exactly when you most need graphs. Decoupling it ensures monitoring survives the thing it's monitoring.</td></tr>
+  <tr><td>Tailscale for everything internal-but-remote</td><td>Free, NAT-traversing, no public ports needed, works identically from coffee shop / phone / home.</td></tr>
+  <tr><td>One Ubuntu cloud-init template, cloned 10× via Terraform</td><td>Adding the 11th VM is one entry in <code>locals.tf</code> + <code>terraform apply</code>. Goldenmaster, no snowflakes.</td></tr>
+  <tr><td>Self-hosted GitHub Actions runner</td><td>Zero billed CI minutes. Runner sits inside the LAN with access to k3s + Postgres — capabilities GitHub-hosted runners would never have.</td></tr>
+  <tr><td>Restic for backups + B2 for off-site</td><td>Deduplicated, encrypted, append-only. Off-site protects against house-level disasters.</td></tr>
+  <tr><td>UniFi as lab gateway, Spectrum untouched</td><td>Family network keeps working when we break things. Lab is portable to any upstream.</td></tr>
+</table>
+
+<h2 class="phase">6. What's in the cluster vs outside</h2>
+
+<table>
+  <tr><th>Inside k3s</th><th>Outside k3s (own VM or host)</th></tr>
+  <tr><td>Application workloads (your apps)</td><td>PostgreSQL (db1)</td></tr>
+  <tr><td>Traefik (ingress controller)</td><td>Grafana + Prometheus + Loki (obs1)</td></tr>
+  <tr><td>cert-manager (TLS automation)</td><td>Self-hosted GitHub Actions runner (ci1)</td></tr>
+  <tr><td>k8s Secrets (<code>postgres-app</code>, certs)</td><td>AdGuard Home DNS (util1)</td></tr>
+  <tr><td>k8s Services (including <code>ExternalName</code> for Postgres)</td><td>Tailscale subnet router (ts-router)</td></tr>
+  <tr><td></td><td>restic + cron backup orchestration (backup1)</td></tr>
+  <tr><td></td><td>Ollama + AI workloads (Mac Mini)</td></tr>
+</table>
+
+<h2>References</h2>
+<ul>
+  <li>Repo: <code>github.com/codephilip/homelab</code></li>
+  <li>Runbook: companion document, "Homelab Runbook" — bootstrap and maintenance commands</li>
+  <li>Source of truth for IP / sizing plan: <code>terraform/locals.tf</code></li>
+</ul>
+
+</body>
+</html>
