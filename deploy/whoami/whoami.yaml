@@ -1,0 +1,69 @@
+# Test app — proves the whole pipeline (k3s → Traefik → Ingress).
+# Hostname uses nip.io so we don't need a real DNS record:
+#   whoami.10.10.20.120.nip.io  →  10.10.20.120 (k3s-w1)
+# To get TLS via Let's Encrypt later, swap the host for a real domain
+# whose A record points at your public IP, and uncomment the TLS section.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whoami
+  namespace: prod
+  labels:
+    app: whoami
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: whoami
+  template:
+    metadata:
+      labels:
+        app: whoami
+    spec:
+      containers:
+        - name: whoami
+          image: traefik/whoami:latest
+          ports:
+            - containerPort: 80
+          resources:
+            requests: { cpu: "10m", memory: "16Mi" }
+            limits:   { cpu: "100m", memory: "64Mi" }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: whoami
+  namespace: prod
+spec:
+  selector:
+    app: whoami
+  ports:
+    - port: 80
+      targetPort: 80
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: whoami
+  namespace: prod
+  # annotations:
+  #   cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: whoami.10.10.20.120.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: whoami
+                port:
+                  number: 80
+  # tls:
+  #   - hosts: [api.your-real-domain.com]
+  #     secretName: whoami-tls
