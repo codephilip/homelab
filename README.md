@@ -127,38 +127,6 @@ Everything else is `terraform apply` + `ansible-playbook`.
 
 Two parallel networks behind one upstream uplink. The home network (untouched) runs family devices and IoT. The lab network (UniFi) is fully isolated, VLAN-segmented, and portable. Double-NAT is a deliberate trade for separation + portability — Tailscale erases the operational pain.
 
-### IP / VLAN map
-
-```mermaid
-flowchart LR
-    Net["Internet"] --> GW["UniFi Cloud<br/>Gateway Max"]
-
-    GW --> V10["VLAN 10 · LAN<br/>varies"]
-    GW --> V20["VLAN 20 · SERVERS<br/>10.0.0.0/24"]
-    GW --> V30["VLAN 30 · IoT<br/>10.0.30.0/24"]
-    GW --> V40["VLAN 40 · GUEST<br/>10.0.40.0/24"]
-    GW --> V60["VLAN 60 · AI<br/>10.0.10.0/24"]
-
-    V20 --> AG["AdGuard Home<br/>util1 · 10.0.0.132<br/><i>.lab rewrites + ad-block</i>"]
-    V10 -.->|"cross-VLAN allow :53"| AG
-    V60 -.->|"cross-VLAN allow :53"| AG
-
-    V30 -.->|"DHCP DNS"| UP["Upstream<br/>1.1.1.1 / 8.8.8.8"]
-    V40 -.->|"DHCP DNS"| UP
-```
-
-| VLAN | Name | Subnet (example) | DHCP DNS | Used for |
-|---|---|---|---|---|
-| 10 | LAN | varies | AdGuard (`util1`) | Personal devices — laptop, phone |
-| 20 | SERVERS | `10.0.0.0/24` | AdGuard (`util1`) | Proxmox hosts + lab VMs |
-| 30 | IoT | `10.0.30.0/24` | upstream | Lab-side IoT (isolated from SERVERS) |
-| 40 | GUEST | `10.0.40.0/24` | upstream | Visitors (internet only) |
-| 60 | AI | `10.0.10.0/24` | AdGuard (`util1`) | Mac Mini + future AI gear |
-
-**VLAN 10, 20, and 60** all hand out AdGuard's IP as DNS via DHCP — that's what makes `.lab` shortcuts resolve from any device on those segments. The gateway has a cross-VLAN firewall rule allowing `:53` from 10 / 60 into 20 so the query reaches `util1`. **IoT and GUEST** stay on upstream DNS for isolation — neither can resolve nor reach `.lab` hosts on SERVERS.
-
-See [docs/ip-plan.md](docs/ip-plan.md) for the host-level allocation rule (`.10N` for Proxmox hosts, `.1N0–.1N9` for VMs).
-
 ## Stack
 
 | | |
