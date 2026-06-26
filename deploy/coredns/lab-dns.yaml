@@ -20,5 +20,5 @@ data:
     lab:53 {
         errors
         cache 30
-        forward . 10.0.0.132
+        forward . 10.10.20.132
     }

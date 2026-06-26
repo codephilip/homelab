@@ -181,19 +181,19 @@ data:
             #   username: admin
             #   password: {{HOMEPAGE_VAR_ADGUARD_PASSWORD}}
         - whoami:
-            href: http://whoami.10.0.0.120.nip.io
+            href: http://whoami.10.10.20.120.nip.io
             description: Ingress test app (k3s → Traefik)
-            siteMonitor: http://whoami.10.0.0.120.nip.io
+            siteMonitor: http://whoami.10.10.20.120.nip.io
         - Argo CD:
-            href: http://argocd.10.0.0.120.nip.io
+            href: http://argocd.10.10.20.120.nip.io
             description: GitOps controller
-            siteMonitor: http://argocd.10.0.0.120.nip.io
+            siteMonitor: http://argocd.10.10.20.120.nip.io
 
     - AI:
         - Open WebUI:
-            href: http://openwebui.10.0.0.120.nip.io
+            href: http://openwebui.10.10.20.120.nip.io
             description: ChatGPT-style frontend for Ollama
-            siteMonitor: http://openwebui.10.0.0.120.nip.io
+            siteMonitor: http://openwebui.10.10.20.120.nip.io
         - Ollama:
             href: http://ollama.lab:11434
             description: Local LLM inference (Mac Mini, VLAN 60)
