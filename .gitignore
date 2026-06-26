@@ -13,6 +13,7 @@ override.tf.json
 # Private overlay symlinks (see ~/homelab-private/)
 terraform/*.private.tf
 terraform/private-*.tf
+docs/images/
 
 # Ansible
 *.retry

@@ -31,12 +31,11 @@ cd docs
 
 ## Images
 
-`images/` holds the four diagrams embedded in the PDFs plus a dashboard screenshot:
+The diagrams referenced by `architecture.html` / `runbook.html` (stack, network, security, bootstrap) are embedded in the pre-rendered PDFs but the source PNGs are not in this repo — they show network specifics that are personal. To re-render the HTML or replace them, supply your own PNGs in a local `images/` directory:
 
-- `stack.png` — 5-layer system stack (hardware → workloads)
+- `stack.png` — system stack (hardware → workloads)
 - `network.png` — home + lab + Tailscale overlay
 - `security.png` — access boundaries: public internet / edge / interior
-- `bootstrap.png` — 8-step bootstrap flow from bare metal to running apps
-- `homepage.png` — screenshot of the Homepage dashboard at `home.lab`
+- `bootstrap.png` — bootstrap flow from bare metal to running apps
 
-These were generated with Google's Nano Banana 2 (Gemini 3 Pro Image). To regenerate, you'd need a Gemini API key (paid tier — Nano Banana 2 isn't on the free tier).
+The originals were generated with Google's Nano Banana 2 (Gemini 3 Pro Image, paid tier).

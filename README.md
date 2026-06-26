@@ -2,8 +2,6 @@
 
 > A declarative, portable homelab on three HP EliteDesk mini PCs and a Mac Mini. Terraform provisions the VMs, Ansible configures them, k3s runs the apps, Tailscale handles remote access. Bare metal → live workloads in roughly an afternoon.
 
-![System stack](docs/images/stack.png)
-
 ## What's inside
 
 - **3× HP EliteDesk** (`prox-1/2/3`) running **Proxmox VE 8** as standalone hosts (no Proxmox cluster — clustering happens at k3s).
@@ -32,9 +30,7 @@
 
 ## Dashboard
 
-Homepage surfaces every service in one place — health checks, links, system stats. Reachable at `http://home.lab` once DNS is wired up.
-
-![Homepage dashboard](docs/images/homepage.png)
+Homepage (gethomepage.dev) surfaces every service in one place — health checks, links, system stats. Reachable at `http://home.lab` once DNS is wired up. See `deploy/homepage/homepage.yaml` for the tile config and `ansible/utility.yml` for the AdGuard `home.lab` rewrite.
 
 ## Documentation
 
@@ -43,8 +39,6 @@ Two short, focused PDFs:
 - **[docs/architecture.pdf](docs/architecture.pdf)** — executive overview: system layers, network topology, IP plan, security model, design decisions.
 - **[docs/runbook.pdf](docs/runbook.pdf)** — practical "rebuild from scratch + day-to-day maintenance" guide: prerequisites, env vars, commands, what owns what.
 - **[docs/ip-plan.md](docs/ip-plan.md)** — the IP / VLAN / DNS pattern the repo uses, with the allocation rule.
-
-![Bootstrap flow](docs/images/bootstrap.png)
 
 ## Repo layout
 
@@ -116,9 +110,7 @@ curl http://whoami.10.0.0.120.nip.io          # placeholder IP — replace with 
 
 ## Network
 
-![Network architecture](docs/images/network.png)
-
-Two parallel networks behind one Spectrum uplink. The home network (Spectrum, untouched) runs family devices and IoT. The lab network (UniFi) is fully isolated, VLAN-segmented, and portable. Double-NAT is a deliberate trade for separation + portability — Tailscale erases the operational pain.
+Two parallel networks behind one upstream uplink. The home network (untouched) runs family devices and IoT. The lab network (UniFi) is fully isolated, VLAN-segmented, and portable. Double-NAT is a deliberate trade for separation + portability — Tailscale erases the operational pain.
 
 ## Stack
 
