@@ -1,0 +1,12 @@
+modules:
+  # Treat anything <400 as healthy (matches Homepage's siteMonitor semantics).
+  # Skip cert verify because internal `.lab` URLs use self-signed / no certs.
+  http_2xx_any:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: []   # any 2xx/3xx is success
+      fail_if_not_ssl: false
+      tls_config:
+        insecure_skip_verify: true

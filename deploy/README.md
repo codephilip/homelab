@@ -1,14 +1,26 @@
 # deploy/
 
-Kubernetes manifests for apps running in the cluster.
+Kubernetes manifests for apps running in the cluster. Managed by Argo CD
+(installed via `ansible/argocd.yml`) — each subdirectory is a child
+Application defined in `argocd-apps/`.
 
 ```
 deploy/
+├── argocd-apps/    # one Argo CD Application per app below — the "app-of-apps" set
+├── coredns/        # CoreDNS custom config so pods can resolve .lab names
+├── homepage/       # gethomepage.dev dashboard at home.lab
+├── openwebui/      # ChatGPT-style frontend over the Mac mini's Ollama
 └── whoami/         # test app — proves k3s + Traefik + Ingress wiring
-    └── whoami.yaml
 ```
 
-## Apply an app
+## Add a new app
+
+1. Drop manifests in `deploy/<myapp>/`
+2. Add `deploy/argocd-apps/<myapp>.yaml` modeled after the others
+3. `git push` — Argo CD picks it up within ~3 minutes, or hit "Refresh"
+   on the `root` Application in the Argo CD UI
+
+## Apply an app manually (e.g. before Argo CD is up)
 
 ```bash
 export KUBECONFIG=~/homelab/.kube/home.yaml
@@ -19,8 +31,8 @@ kubectl -n prod get pods -w           # watch them come up
 ## Test it
 
 ```bash
-# nip.io trick: any FQDN like whoami.10.10.20.120.nip.io resolves to 10.10.20.120
-curl http://whoami.10.10.20.120.nip.io
+# nip.io trick: any FQDN like whoami.10.0.0.120.nip.io resolves to 10.0.0.120
+curl http://whoami.10.0.0.120.nip.io
 
 # Or, from a browser, just open that URL.
 ```
@@ -31,7 +43,7 @@ replicas → repeated calls hit different pods.
 ## Adding TLS (once you have a real domain)
 
 1. Point a real domain (e.g., `api.yourdomain.com`) at your public IP
-2. Port-forward 80 + 443 on your UniFi gateway → worker IP (10.10.20.120)
+2. Port-forward 80 + 443 on your UniFi gateway → worker IP (10.0.0.120)
 3. In the Ingress, swap the nip.io host for the real one, uncomment:
    - the `cert-manager.io/cluster-issuer: letsencrypt` annotation
    - the `tls:` block at the bottom

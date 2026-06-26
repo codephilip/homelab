@@ -1,0 +1,115 @@
+# Open WebUI — ChatGPT-style frontend for the Mac mini's Ollama.
+#
+# Postgres-backed (openwebui-db Secret comes from ansible/postgres.yml).
+# Uploaded files / RAG data live on a 10Gi local-path PVC on whichever
+# worker the pod lands on.
+#
+# Two Secrets are *not* in git (Argo CD doesn't manage them):
+#   - openwebui-db    → created by ansible/postgres.yml from $OPENWEBUI_DB_PASSWORD
+#   - openwebui-auth  → create once with:
+#       kubectl -n prod create secret generic openwebui-auth \
+#         --from-literal=WEBUI_SECRET_KEY="$(openssl rand -base64 32)"
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openwebui-data
+  namespace: prod
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openwebui
+  namespace: prod
+  labels:
+    app: openwebui
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: openwebui
+  template:
+    metadata:
+      labels:
+        app: openwebui
+    spec:
+      containers:
+        - name: openwebui
+          image: ghcr.io/open-webui/open-webui:main
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OLLAMA_BASE_URL
+              # Mac mini on the AI VLAN — swap for your Ollama host's IP
+              value: http://10.0.10.50:11434
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: openwebui-db, key: DATABASE_URL }
+            - name: WEBUI_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: openwebui-auth, key: WEBUI_SECRET_KEY }
+            # First sign-up becomes admin; further sign-ups still allowed.
+            # Flip to "false" once you've created the accounts you want.
+            - name: ENABLE_SIGNUP
+              value: "true"
+          resources:
+            requests: { cpu: "100m", memory: "512Mi" }
+            limits:   { cpu: "2",    memory: "2Gi" }
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: openwebui-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openwebui
+  namespace: prod
+spec:
+  selector:
+    app: openwebui
+  ports:
+    - port: 80
+      targetPort: 8080
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openwebui
+  namespace: prod
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: openwebui.10.0.0.120.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: openwebui
+                port:
+                  number: 80

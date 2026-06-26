@@ -1,0 +1,57 @@
+---
+# Install Tailscale directly on each Proxmox host (belt-and-suspenders).
+# If ts-router ever dies, each host is still independently reachable on the
+# tailnet via prox-N.<tailnet>.ts.net, including the Proxmox web UI at :8006.
+#
+# Requires TAILSCALE_AUTHKEY env var.
+
+- name: Tailscale on Proxmox hosts
+  hosts: proxmox_hosts
+  become: false   # we already SSH as root
+  gather_facts: true
+  vars:
+    tailscale_authkey: "{{ lookup('env', 'TAILSCALE_AUTHKEY') }}"
+
+  tasks:
+    - name: Assert TAILSCALE_AUTHKEY is set
+      ansible.builtin.assert:
+        that: tailscale_authkey | length > 0
+        fail_msg: "TAILSCALE_AUTHKEY env var is empty"
+
+    - name: Install tailscale via official script
+      ansible.builtin.shell: |
+        curl -fsSL https://tailscale.com/install.sh | sh
+      args:
+        creates: /usr/sbin/tailscale
+
+    - name: Check current tailscale state
+      ansible.builtin.command: tailscale status --json
+      register: ts_status
+      changed_when: false
+      failed_when: false
+
+    - name: Parse BackendState
+      ansible.builtin.set_fact:
+        ts_backend_state: >-
+          {{ (ts_status.stdout | from_json).BackendState
+             if ts_status.rc == 0 and ts_status.stdout | length > 0
+             else 'Unknown' }}
+
+    - name: tailscale up (auth + enable Tailscale SSH)
+      ansible.builtin.command: >
+        tailscale up
+        --authkey={{ tailscale_authkey }}
+        --accept-dns=false
+        --ssh
+        --hostname={{ inventory_hostname }}
+      when: ts_backend_state in ['NoState', 'NeedsLogin', 'Stopped', 'Unknown']
+      no_log: true
+
+    - name: Fetch Tailscale IP
+      ansible.builtin.command: tailscale ip -4
+      register: ts_ip
+      changed_when: false
+
+    - name: Print Tailscale IP
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} on tailnet at {{ ts_ip.stdout }} — UI: https://{{ inventory_hostname }}:8006 (via MagicDNS) or https://{{ ts_ip.stdout }}:8006"

@@ -1,7 +1,17 @@
 ---
-# Grafana + Prometheus + Loki on obs1 via Docker Compose.
+# Grafana + Prometheus + Loki + blackbox-exporter on obs1 via Docker Compose.
 # Deliberately *outside* k3s so it survives a cluster meltdown — that's when
 # you need graphs most.
+#
+# Health-check flow:
+#   blackbox-exporter probes each URL in `blackbox_probe_targets`
+#   → Prometheus scrapes the result as `probe_success` (0/1)
+#   → Grafana evaluates an alert rule on it
+#   → On DOWN for 5m, Grafana emails via Resend SMTP
+#
+# Required env vars (see .envrc.example):
+#   GRAFANA_ADMIN_PASSWORD, RESEND_API_KEY, ALERT_EMAIL_TO
+#   ALERT_EMAIL_FROM (defaults to onboarding@resend.dev)
 
 - name: Observability stack on obs1
   hosts: observability
@@ -9,16 +19,49 @@
   gather_facts: true
   vars:
     grafana_admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') }}"
+    resend_api_key:         "{{ lookup('env', 'RESEND_API_KEY') }}"
+    alert_email_from:       "{{ lookup('env', 'ALERT_EMAIL_FROM') or 'onboarding@resend.dev' }}"
+    alert_email_to:         "{{ lookup('env', 'ALERT_EMAIL_TO') }}"
     k3s_node_ips:
       - "{{ hostvars['k3s-cp1'].ansible_host }}"
       - "{{ hostvars['k3s-w1'].ansible_host }}"
       - "{{ hostvars['k3s-w2'].ansible_host }}"
+    # Mirror Homepage's siteMonitor list. Keep these two in sync by hand.
+    blackbox_probe_targets:
+      - https://prox-1.lab:8006
+      - https://prox-2.lab:8006
+      - https://prox-3.lab:8006
+      - http://grafana.lab:3000
+      - http://prometheus.lab:9090
+      - http://loki.lab:3100/ready
+      - http://adguard.lab
+      - "http://whoami.{{ hostvars['k3s-w1'].ansible_host }}.nip.io"
+      - http://ollama.lab:11434
+
+  handlers:
+    - name: restart prometheus
+      ansible.builtin.command: docker compose restart prometheus
+      args: { chdir: /opt/obs }
+
+    - name: restart blackbox
+      ansible.builtin.command: docker compose restart blackbox
+      args: { chdir: /opt/obs }
+
+    - name: restart grafana
+      ansible.builtin.command: docker compose restart grafana
+      args: { chdir: /opt/obs }
 
   tasks:
-    - name: Assert GRAFANA_ADMIN_PASSWORD set
+    - name: Assert required env vars are set
       ansible.builtin.assert:
-        that: grafana_admin_password | length > 0
-        fail_msg: "GRAFANA_ADMIN_PASSWORD env var is empty"
+        that:
+          - grafana_admin_password | length > 0
+          - resend_api_key | length > 0
+          - alert_email_to | length > 0
+        fail_msg: |
+          One or more required env vars are empty. Need:
+            GRAFANA_ADMIN_PASSWORD, RESEND_API_KEY, ALERT_EMAIL_TO
+          (ALERT_EMAIL_FROM optional, defaults to onboarding@resend.dev)
 
     - name: Install docker + compose plugin
       ansible.builtin.apt:
@@ -35,11 +78,18 @@
         state: started
         enabled: true
 
-    - name: Create /opt/obs
+    - name: Create /opt/obs and provisioning dirs
       ansible.builtin.file:
-        path: /opt/obs
+        path: "{{ item }}"
         state: directory
         mode: '0755'
+      loop:
+        - /opt/obs
+        - /opt/obs/grafana
+        - /opt/obs/grafana/provisioning
+        - /opt/obs/grafana/provisioning/datasources
+        - /opt/obs/grafana/provisioning/dashboards
+        - /opt/obs/grafana/provisioning/alerting
 
     - name: Write docker-compose.yml
       ansible.builtin.copy:
@@ -58,6 +108,19 @@
                 - --config.file=/etc/prometheus/prometheus.yml
                 - --storage.tsdb.path=/prometheus
                 - --storage.tsdb.retention.time=30d
+              dns: ["{{ hostvars['util1'].ansible_host }}"]
+
+            blackbox:
+              image: prom/blackbox-exporter:latest
+              restart: unless-stopped
+              ports: ["9115:9115"]
+              volumes:
+                - ./blackbox.yml:/etc/blackbox_exporter/config.yml
+              command:
+                - --config.file=/etc/blackbox_exporter/config.yml
+              # AdGuard resolves `.lab` names — container's default Docker
+              # DNS doesn't, so probes to grafana.lab etc. would NXDOMAIN.
+              dns: ["{{ hostvars['util1'].ansible_host }}"]
 
             loki:
               image: grafana/loki:latest
@@ -72,7 +135,17 @@
               environment:
                 GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
                 GF_USERS_ALLOW_SIGN_UP: "false"
-              volumes: [grafana-data:/var/lib/grafana]
+                # SMTP → Resend
+                GF_SMTP_ENABLED: "true"
+                GF_SMTP_HOST: "smtp.resend.com:587"
+                GF_SMTP_USER: "resend"
+                GF_SMTP_PASSWORD: "{{ resend_api_key }}"
+                GF_SMTP_FROM_ADDRESS: "{{ alert_email_from }}"
+                GF_SMTP_FROM_NAME: "Homelab"
+                GF_SMTP_STARTTLS_POLICY: "MandatoryStartTLS"
+              volumes:
+                - grafana-data:/var/lib/grafana
+                - ./grafana/provisioning:/etc/grafana/provisioning
 
           volumes:
             prom-data: {}
@@ -85,20 +158,80 @@
         src: templates/prometheus.yml.j2
         dest: /opt/obs/prometheus.yml
         mode: '0644'
+      notify: restart prometheus
 
-    - name: Bring up the stack
+    - name: Write blackbox.yml
+      ansible.builtin.template:
+        src: templates/blackbox.yml.j2
+        dest: /opt/obs/blackbox.yml
+        mode: '0644'
+      notify: restart blackbox
+
+    - name: Write Grafana datasources provisioning
+      ansible.builtin.template:
+        src: templates/grafana-provisioning/datasources/datasources.yml.j2
+        dest: /opt/obs/grafana/provisioning/datasources/datasources.yml
+        mode: '0644'
+      notify: restart grafana
+
+    - name: Write Grafana dashboard provider
+      ansible.builtin.copy:
+        src: templates/grafana-provisioning/dashboards/dashboards.yml
+        dest: /opt/obs/grafana/provisioning/dashboards/dashboards.yml
+        mode: '0644'
+      notify: restart grafana
+
+    - name: Write Grafana dashboard JSON(s)
+      ansible.builtin.copy:
+        src: templates/grafana-provisioning/dashboards/homelab-health.json
+        dest: /opt/obs/grafana/provisioning/dashboards/homelab-health.json
+        mode: '0644'
+      notify: restart grafana
+
+    - name: Write Grafana alerting notification templates (email HTML)
+      ansible.builtin.template:
+        src: templates/grafana-provisioning/alerting/templates.yml.j2
+        dest: /opt/obs/grafana/provisioning/alerting/templates.yml
+        mode: '0644'
+      notify: restart grafana
+
+    - name: Write Grafana alerting contact points
+      ansible.builtin.template:
+        src: templates/grafana-provisioning/alerting/contact-points.yml.j2
+        dest: /opt/obs/grafana/provisioning/alerting/contact-points.yml
+        mode: '0644'
+      notify: restart grafana
+
+    - name: Write Grafana alerting notification policies
+      ansible.builtin.template:
+        src: templates/grafana-provisioning/alerting/notification-policies.yml.j2
+        dest: /opt/obs/grafana/provisioning/alerting/notification-policies.yml
+        mode: '0644'
+      notify: restart grafana
+
+    - name: Write Grafana alerting rules
+      ansible.builtin.template:
+        src: templates/grafana-provisioning/alerting/rules.yml.j2
+        dest: /opt/obs/grafana/provisioning/alerting/rules.yml
+        mode: '0644'
+      notify: restart grafana
+
+    - name: Bring up the stack (creates new services, recreates on compose change)
       ansible.builtin.command:
-        cmd: docker compose up -d
+        cmd: docker compose up -d --remove-orphans
         chdir: /opt/obs
       register: compose_up
-      changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr"
+      changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr or 'Recreated' in compose_up.stderr"
 
     - name: Print Grafana URL
       ansible.builtin.debug:
         msg: |
-          Grafana: http://{{ ansible_host }}:3000
+          Grafana:           http://{{ ansible_host }}:3000
+          Dashboard:         http://{{ ansible_host }}:3000/d/homelab-health
+          Alerting → Rules:  http://{{ ansible_host }}:3000/alerting/list
             user:  admin
-            pass:  (your GRAFANA_ADMIN_PASSWORD env var)
+            pass:  (your GRAFANA_ADMIN_PASSWORD)
+          Alerts send to:    {{ alert_email_to }}  (from {{ alert_email_from }})
 
 # ----------------------------------------------------------------------------
 # Install node-exporter on every lab VM so Prometheus has CPU/RAM/disk stats.

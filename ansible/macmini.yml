@@ -42,22 +42,39 @@
     # Then sign in via the menu-bar app.
 
     # ---- Ollama: bind on all interfaces so apps in k3s (and via Tailscale) can hit it ----
-    - name: Set OLLAMA_HOST in launchd (so brew services starts it with 0.0.0.0)
-      ansible.builtin.command: launchctl setenv OLLAMA_HOST 0.0.0.0:11434
+    # We can't use `launchctl setenv` — modern launchd doesn't propagate session
+    # env into LaunchAgents. And we can't use `brew services restart` after
+    # editing the plist — brew regenerates the plist from its template and
+    # strips our additions. So: have brew generate the plist once, stop the
+    # service, inject OLLAMA_HOST via PlistBuddy, then load with launchctl
+    # directly (bypassing brew services). Re-running `brew services …` on
+    # ollama later will undo this — re-run this playbook to repair.
+    - name: Ensure brew-managed ollama plist exists
+      ansible.builtin.command: "{{ brew_path }} services start ollama"
       changed_when: false
 
-    - name: Stop ollama service (if running) before applying env
+    - name: Stop ollama via brew services (unload before editing plist)
       ansible.builtin.command: "{{ brew_path }} services stop ollama"
       changed_when: false
       failed_when: false
 
-    - name: Start ollama as a brew service
-      ansible.builtin.command: "{{ brew_path }} services start ollama"
+    - name: Inject OLLAMA_HOST=0.0.0.0:11434 into the launchd plist
+      ansible.builtin.shell: |
+        PLIST=~/Library/LaunchAgents/homebrew.mxcl.ollama.plist
+        /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:OLLAMA_HOST 0.0.0.0:11434" "$PLIST" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:OLLAMA_HOST string 0.0.0.0:11434" "$PLIST"
       changed_when: false
 
-    - name: Wait for ollama to be listening
+    - name: Load ollama via launchctl (preserves our plist edit)
+      ansible.builtin.shell: |
+        PLIST=~/Library/LaunchAgents/homebrew.mxcl.ollama.plist
+        launchctl bootout gui/$(id -u)/homebrew.mxcl.ollama 2>/dev/null || true
+        launchctl bootstrap gui/$(id -u) "$PLIST"
+      changed_when: false
+
+    - name: Wait for ollama to be listening on all interfaces
       ansible.builtin.wait_for:
-        host: 127.0.0.1
+        host: "{{ ansible_host }}"
         port: 11434
         timeout: 30
 
@@ -75,7 +92,7 @@
             icon) and sign in to the same tailnet. After that, the Mini will
             be reachable by name from anywhere on your tailnet.
 
-          → OLLAMA_HOST=0.0.0.0:11434 is set via `launchctl setenv` which
-            persists for this user session but resets on reboot. To make it
-            permanent, add to ~/.zprofile:
-                export OLLAMA_HOST=0.0.0.0:11434
+          → OLLAMA_HOST=0.0.0.0:11434 is baked into the brew-managed
+            LaunchAgent plist. It survives reboots, but any future
+            `brew services start|stop|restart ollama` will regenerate
+            the plist and strip the var — re-run this playbook to repair.

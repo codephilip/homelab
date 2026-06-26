@@ -1,0 +1,119 @@
+---
+# Install Argo CD into k3s via Helm, then bootstrap the "app-of-apps"
+# Application that watches deploy/argocd-apps/ in this repo. Every other
+# in-cluster app (whoami, homepage, coredns, openwebui, …) is managed by
+# that root Application — git push → cluster syncs.
+#
+# Manual one-shots that aren't worth automating:
+#   - Initial admin password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+#   - Web UI: http://argocd.<k3s-w1 IP>.nip.io
+#
+# Repo auth: this repo is public, so no creds/secrets are wired in.
+
+- name: Argo CD
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kubeconfig:  "{{ playbook_dir }}/../.kube/home.yaml"
+    repo_url:    "https://github.com/codephilip/homelab.git"
+    repo_branch: "main"
+    argocd_host: "argocd.{{ hostvars['k3s-w1'].ansible_host }}.nip.io"
+
+  tasks:
+    - name: Add argo helm repo
+      ansible.builtin.command: helm repo add argo https://argoproj.github.io/argo-helm
+      register: repo_argo
+      changed_when: "'has been added' in repo_argo.stdout"
+      failed_when: repo_argo.rc != 0 and 'already exists' not in repo_argo.stderr
+
+    - name: helm repo update
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    - name: Install Argo CD
+      ansible.builtin.command: >
+        helm upgrade --install argocd argo/argo-cd
+        --kubeconfig {{ kubeconfig }}
+        --namespace argocd --create-namespace
+        --set configs.params."server\.insecure"=true
+        --set server.ingress.enabled=false
+      register: argocd_helm
+      changed_when: "'STATUS: deployed' in argocd_helm.stdout"
+
+    - name: Wait for Argo CD server to be ready
+      ansible.builtin.command: >
+        kubectl --kubeconfig {{ kubeconfig }}
+        -n argocd rollout status deploy/argocd-server --timeout=180s
+      changed_when: false
+
+    # Ingress is declared as plain k8s so the URL/host can be changed without
+    # bouncing the helm release.
+    - name: Apply Argo CD Ingress
+      ansible.builtin.shell: |
+        cat <<'YAML' | kubectl --kubeconfig={{ kubeconfig }} apply -f -
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: argocd
+          namespace: argocd
+        spec:
+          ingressClassName: traefik
+          rules:
+            - host: {{ argocd_host }}
+              http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: argocd-server
+                        port:
+                          number: 80
+        YAML
+      changed_when: false
+
+    # Root "app-of-apps" — watches deploy/argocd-apps/ and creates one
+    # Argo CD Application per file there. Each child Application then
+    # syncs the corresponding deploy/<app>/ directory.
+    - name: Apply root app-of-apps Application
+      ansible.builtin.shell: |
+        cat <<'YAML' | kubectl --kubeconfig={{ kubeconfig }} apply -f -
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: root
+          namespace: argocd
+          finalizers:
+            - resources-finalizer.argocd.argoproj.io
+        spec:
+          project: default
+          source:
+            repoURL: {{ repo_url }}
+            targetRevision: {{ repo_branch }}
+            path: deploy/argocd-apps
+          destination:
+            server: https://kubernetes.default.svc
+            namespace: argocd
+          syncPolicy:
+            automated:
+              prune: true
+              selfHeal: true
+            syncOptions:
+              - CreateNamespace=true
+        YAML
+      changed_when: false
+
+    - name: Show Argo CD info
+      ansible.builtin.debug:
+        msg: |
+          ✔ Argo CD installed.
+
+          Web UI:   http://{{ argocd_host }}
+          Username: admin
+          Password: kubectl --kubeconfig {{ kubeconfig }} -n argocd \
+                      get secret argocd-initial-admin-secret \
+                      -o jsonpath='{.data.password}' | base64 -d
+
+          Root Application "root" watches {{ repo_url }} (branch {{ repo_branch }})
+          at deploy/argocd-apps/. Add a new file there → Argo creates the
+          corresponding child Application → cluster syncs.

@@ -4,7 +4,7 @@
 
 provider "proxmox" {
   alias     = "prox1"
-  endpoint  = "https://10.10.20.101:8006/"
+  endpoint  = "https://10.0.0.101:8006/"
   api_token = var.proxmox_api_token_prox1
   insecure  = true
 
@@ -16,7 +16,7 @@ provider "proxmox" {
 
 provider "proxmox" {
   alias     = "prox2"
-  endpoint  = "https://10.10.20.102:8006/"
+  endpoint  = "https://10.0.0.102:8006/"
   api_token = var.proxmox_api_token_prox2
   insecure  = true
 
@@ -28,7 +28,7 @@ provider "proxmox" {
 
 provider "proxmox" {
   alias     = "prox3"
-  endpoint  = "https://10.10.20.103:8006/"
+  endpoint  = "https://10.0.0.103:8006/"
   api_token = var.proxmox_api_token_prox3
   insecure  = true
 

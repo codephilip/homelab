@@ -1,0 +1,200 @@
+# Homepage — self-hosted dashboard (gethomepage.dev). Reachable at
+# http://home.lab via Traefik. The siteMonitor checks need k3s CoreDNS
+# to resolve `.lab` names — see deploy/coredns/lab-dns.yaml.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homepage
+  namespace: prod
+  labels:
+    app: homepage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: homepage
+  template:
+    metadata:
+      labels:
+        app: homepage
+    spec:
+      containers:
+        - name: homepage
+          image: ghcr.io/gethomepage/homepage:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+          env:
+            - name: HOMEPAGE_ALLOWED_HOSTS
+              value: home.lab
+          resources:
+            requests: { cpu: "25m", memory: "64Mi" }
+            limits:   { cpu: "250m", memory: "256Mi" }
+          volumeMounts:
+            - { name: config, mountPath: /app/config/settings.yaml,  subPath: settings.yaml }
+            - { name: config, mountPath: /app/config/widgets.yaml,   subPath: widgets.yaml }
+            - { name: config, mountPath: /app/config/services.yaml,  subPath: services.yaml }
+            - { name: config, mountPath: /app/config/bookmarks.yaml, subPath: bookmarks.yaml }
+      volumes:
+        - name: config
+          configMap:
+            name: homepage-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homepage
+  namespace: prod
+spec:
+  selector:
+    app: homepage
+  ports:
+    - port: 80
+      targetPort: 3000
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homepage
+  namespace: prod
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: home.lab
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: homepage
+                port:
+                  number: 80
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homepage-config
+  namespace: prod
+data:
+  settings.yaml: |
+    title: Homelab
+    theme: dark
+    color: slate
+    headerStyle: clean
+    layout:
+      Infrastructure:
+        style: row
+        columns: 3
+      Observability:
+        style: row
+        columns: 3
+      Platform:
+        style: row
+        columns: 3
+      AI:
+        style: row
+        columns: 2
+
+  widgets.yaml: |
+    - greeting:
+        text_size: xl
+        text: Homelab
+    - datetime:
+        text_size: l
+        format:
+          dateStyle: full
+          timeStyle: short
+    - resources:
+        cpu: true
+        memory: true
+        disk: /app/config
+
+  bookmarks.yaml: |
+    - Repos:
+        - homelab:
+            - abbr: HL
+              href: https://github.com/codephilip/homelab
+    - Docs:
+        - Proxmox VE:
+            - abbr: PVE
+              href: https://pve.proxmox.com/wiki/Main_Page
+        - k3s:
+            - abbr: K3S
+              href: https://docs.k3s.io
+        - Argo CD:
+            - abbr: ARG
+              href: https://argo-cd.readthedocs.io
+
+  services.yaml: |
+    - Infrastructure:
+        - prox-1:
+            href: https://prox-1.lab:8006
+            description: Proxmox host 1 — anchor (cp + db + ts + backup)
+            siteMonitor: https://prox-1.lab:8006
+        - prox-2:
+            href: https://prox-2.lab:8006
+            description: Proxmox host 2 — workers + CI
+            siteMonitor: https://prox-2.lab:8006
+        - prox-3:
+            href: https://prox-3.lab:8006
+            description: Proxmox host 3 — workers + ops
+            siteMonitor: https://prox-3.lab:8006
+        - UniFi Gateway:
+            href: https://gw.lab
+            description: Lab router / firewall (VLANs, DHCP, DNS)
+
+    - Observability:
+        - Grafana:
+            href: http://grafana.lab:3000
+            description: Dashboards
+            siteMonitor: http://grafana.lab:3000
+            # To enable the live widget, create a Grafana API token + Secret,
+            # then uncomment:
+            # widget:
+            #   type: grafana
+            #   url: http://grafana.lab:3000
+            #   username: admin
+            #   password: {{HOMEPAGE_VAR_GRAFANA_PASSWORD}}
+        - Prometheus:
+            href: http://prometheus.lab:9090
+            description: Metrics + alerting
+            siteMonitor: http://prometheus.lab:9090
+        - Loki:
+            href: http://loki.lab:3100
+            description: Log aggregation (API only)
+            # Loki's root path returns 404 — /ready returns 200 when healthy.
+            siteMonitor: http://loki.lab:3100/ready
+
+    - Platform:
+        - AdGuard Home:
+            href: http://adguard.lab
+            description: DNS + ad-blocking
+            siteMonitor: http://adguard.lab
+            # widget:
+            #   type: adguard
+            #   url: http://adguard.lab
+            #   username: admin
+            #   password: {{HOMEPAGE_VAR_ADGUARD_PASSWORD}}
+        - whoami:
+            href: http://whoami.10.0.0.120.nip.io
+            description: Ingress test app (k3s → Traefik)
+            siteMonitor: http://whoami.10.0.0.120.nip.io
+        - Argo CD:
+            href: http://argocd.10.0.0.120.nip.io
+            description: GitOps controller
+            siteMonitor: http://argocd.10.0.0.120.nip.io
+
+    - AI:
+        - Open WebUI:
+            href: http://openwebui.10.0.0.120.nip.io
+            description: ChatGPT-style frontend for Ollama
+            siteMonitor: http://openwebui.10.0.0.120.nip.io
+        - Ollama:
+            href: http://ollama.lab:11434
+            description: Local LLM inference (Mac Mini, VLAN 60)
+            siteMonitor: http://ollama.lab:11434

@@ -24,3 +24,23 @@ scrape_configs:
 {% for h in groups['linux_vms'] %}
           - "{{ hostvars[h].ansible_host }}:9100"
 {% endfor %}
+
+  # Blackbox HTTP probes — Prometheus asks blackbox-exporter to fetch each
+  # URL; the result lands as `probe_success` (0/1) and `probe_duration_seconds`.
+  # Grafana alert rules consume these to email on downtime.
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx_any]
+    static_configs:
+      - targets:
+{% for url in blackbox_probe_targets %}
+          - "{{ url }}"
+{% endfor %}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115

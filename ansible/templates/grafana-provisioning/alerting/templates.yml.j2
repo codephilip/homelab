@@ -1,0 +1,80 @@
+apiVersion: 1
+
+templates:
+  - orgId: 1
+    name: homelab
+    template: |
+{% raw %}
+      {{ define "homelab.email.subject" -}}
+        [{{ if eq .Status "firing" }}FIRING{{ else }}RESOLVED{{ end }}]
+        {{- with (index .Alerts 0).Labels.alertname }} {{ . }}{{ end }}
+        {{- with (index .Alerts 0).Labels.instance }} — {{ . }}{{ end }}
+      {{- end }}
+
+      {{ define "homelab.email.message" }}
+      <!DOCTYPE html>
+      <html><body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f3f4f6;padding:24px 12px;">
+          <tr><td align="center">
+            <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08);max-width:600px;">
+
+              {{ if eq .Status "firing" }}
+              <tr><td style="background:#dc2626;color:#ffffff;padding:18px 24px;font-size:18px;font-weight:600;letter-spacing:-0.01em;">
+                Firing &middot; {{ len .Alerts.Firing }} alert{{ if gt (len .Alerts.Firing) 1 }}s{{ end }}
+              </td></tr>
+              {{ else }}
+              <tr><td style="background:#16a34a;color:#ffffff;padding:18px 24px;font-size:18px;font-weight:600;letter-spacing:-0.01em;">
+                Resolved &middot; {{ len .Alerts.Resolved }} alert{{ if gt (len .Alerts.Resolved) 1 }}s{{ end }}
+              </td></tr>
+              {{ end }}
+
+              {{ range .Alerts }}
+              <tr><td style="padding:22px 24px;border-bottom:1px solid #e5e7eb;">
+                <div style="font-size:16px;font-weight:600;color:#111827;margin:0 0 6px 0;line-height:1.35;">
+                  {{ .Annotations.summary }}
+                </div>
+                {{ if .Annotations.description }}
+                <div style="font-size:14px;color:#4b5563;margin:0 0 16px 0;line-height:1.55;">
+                  {{ .Annotations.description }}
+                </div>
+                {{ end }}
+
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="font-size:13px;color:#374151;border-collapse:collapse;">
+                  {{ with .Labels.instance }}
+                  <tr>
+                    <td style="padding:5px 0;color:#6b7280;width:90px;">Service</td>
+                    <td style="padding:5px 0;font-family:ui-monospace,SFMono-Regular,'Menlo',Consolas,monospace;font-size:12px;color:#111827;">{{ . }}</td>
+                  </tr>
+                  {{ end }}
+                  {{ with .Labels.severity }}
+                  <tr>
+                    <td style="padding:5px 0;color:#6b7280;">Severity</td>
+                    <td style="padding:5px 0;text-transform:uppercase;letter-spacing:0.04em;font-size:11px;font-weight:600;color:{{ if eq . "critical" }}#dc2626{{ else if eq . "warning" }}#d97706{{ else }}#4b5563{{ end }};">{{ . }}</td>
+                  </tr>
+                  {{ end }}
+                  <tr>
+                    <td style="padding:5px 0;color:#6b7280;">Started</td>
+                    <td style="padding:5px 0;">{{ .StartsAt.Format "Mon Jan 2 15:04:05 MST" }}</td>
+                  </tr>
+                  {{ if eq .Status "resolved" }}
+                  <tr>
+                    <td style="padding:5px 0;color:#6b7280;">Resolved</td>
+                    <td style="padding:5px 0;">{{ .EndsAt.Format "Mon Jan 2 15:04:05 MST" }}</td>
+                  </tr>
+                  {{ end }}
+                </table>
+              </td></tr>
+              {{ end }}
+
+              <tr><td style="padding:16px 24px;background:#f9fafb;font-size:12px;color:#6b7280;">
+                <a href="{{ .ExternalURL }}/alerting/list" style="color:#2563eb;text-decoration:none;font-weight:500;">View in Grafana</a>
+                &nbsp;&middot;&nbsp;
+                <a href="{{ .ExternalURL }}/d/homelab-health" style="color:#2563eb;text-decoration:none;font-weight:500;">Health dashboard</a>
+              </td></tr>
+            </table>
+            <div style="font-size:11px;color:#9ca3af;margin-top:14px;">Homelab Grafana</div>
+          </td></tr>
+        </table>
+      </body></html>
+      {{ end }}
+{% endraw %}

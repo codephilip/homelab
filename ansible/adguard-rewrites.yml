@@ -1,0 +1,83 @@
+---
+# Manage AdGuard's DNS rewrites declaratively. This is the cluster's
+# internal "hosts file" — every device using AdGuard as DNS gets these
+# names resolved automatically.
+#
+# Add / remove entries in `adguard_rewrites` below, then re-run.
+#
+# The list below is intentionally minimal — just enough to demo the
+# pattern with the example IPs from inventory.yml. Extend it to match
+# whatever hosts are in your inventory.
+
+- name: AdGuard DNS rewrites
+  hosts: utility
+  become: true
+  gather_facts: false
+
+  vars:
+    adguard_config: /opt/adguard/confdir/AdGuardHome.yaml
+
+    adguard_rewrites:
+      # ---- Network gear ----
+      - { domain: "gw.lab",        answer: "10.0.0.1"   }
+
+      # ---- Proxmox hosts ----
+      - { domain: "prox-1.lab",    answer: "10.0.0.101" }
+      - { domain: "prox-2.lab",    answer: "10.0.0.102" }
+      - { domain: "prox-3.lab",    answer: "10.0.0.103" }
+
+      # ---- A couple of VMs to demonstrate the pattern ----
+      - { domain: "k3s.lab",       answer: "10.0.0.110" }
+      - { domain: "db.lab",        answer: "10.0.0.111" }
+      - { domain: "grafana.lab",   answer: "10.0.0.131" }
+      - { domain: "adguard.lab",   answer: "10.0.0.132" }
+
+  tasks:
+    - name: Ensure python3-yaml is installed (needed for the helper below)
+      ansible.builtin.apt:
+        name: python3-yaml
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Apply rewrites to AdGuard config (idempotent)
+      ansible.builtin.shell:
+        cmd: |
+          python3 - <<'PYEOF'
+          import json, sys, yaml
+          path = "{{ adguard_config }}"
+          desired = json.loads(r'''{{ adguard_rewrites | to_json }}''')
+          with open(path) as f:
+              cfg = yaml.safe_load(f)
+          # AdGuard stores rewrites under filtering.rewrites (NOT dns.rewrites)
+          current = cfg.get("filtering", {}).get("rewrites") or []
+          # Compare only domain+answer (ignore the enabled flag for change detection)
+          key = lambda r: (r["domain"], r["answer"])
+          # Cleanup: drop legacy dns.rewrites key if it ever existed
+          dns_rewrites_present = "rewrites" in cfg.get("dns", {})
+          if sorted(current, key=key) == sorted(desired, key=key) and not dns_rewrites_present:
+              print("unchanged")
+              sys.exit(0)
+          # AdGuard schema requires each entry to have enabled=true
+          for r in desired:
+              r.setdefault("enabled", True)
+          cfg.setdefault("filtering", {})["rewrites"] = desired
+          cfg.setdefault("filtering", {})["rewrites_enabled"] = True
+          if dns_rewrites_present:
+              cfg["dns"].pop("rewrites", None)
+          with open(path, "w") as f:
+              yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
+          print("changed")
+          PYEOF
+      register: yaml_result
+      changed_when: "'changed' in yaml_result.stdout"
+
+    - name: Restart AdGuard to pick up new rewrites
+      ansible.builtin.command:
+        cmd: docker compose restart
+        chdir: /opt/adguard
+      when: yaml_result.changed
+
+    - name: Show what's now live
+      ansible.builtin.debug:
+        msg: "Applied {{ adguard_rewrites | length }} rewrites. AdGuard {{ 'reloaded' if yaml_result.changed else 'unchanged' }}."

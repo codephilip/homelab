@@ -1,6 +1,6 @@
 ---
 # Install Postgres 16 on db1, configure it to accept connections from the
-# 10.10.20.0/24 lab subnet, create an "app" database owned by "appuser",
+# lab subnet (see allow_cidr below), create an "app" database owned by "appuser",
 # then expose it inside the k3s cluster as a Service so apps can use the
 # DNS name `postgres.prod.svc` instead of an IP.
 #
@@ -15,13 +15,24 @@
     app_db_name: app
     app_db_user: appuser
     app_db_password: "{{ lookup('env', 'POSTGRES_APP_PASSWORD') }}"
-    allow_cidr: "10.10.20.0/24"
+    allow_cidr: "10.0.0.0/24"
+    # Per-app DBs. Each entry → one DB, one role, one k8s Secret in `prod`
+    # named "<name>-db" with the usual POSTGRES_* keys + DATABASE_URL.
+    # Password is read from the env var named in `password_env`.
+    extra_app_dbs:
+      - { name: openwebui, user: openwebui, password_env: OPENWEBUI_DB_PASSWORD }
 
   tasks:
     - name: Assert POSTGRES_APP_PASSWORD is set
       ansible.builtin.assert:
         that: app_db_password | length > 0
         fail_msg: "POSTGRES_APP_PASSWORD env var is empty"
+
+    - name: Assert per-app DB passwords are set
+      ansible.builtin.assert:
+        that: lookup('env', item.password_env) | length > 0
+        fail_msg: "{{ item.password_env }} env var is empty (needed for {{ item.name }})"
+      loop: "{{ extra_app_dbs }}"
 
     - name: Install postgres + ansible's psycopg2 driver
       ansible.builtin.apt:
@@ -69,6 +80,23 @@
         owner: "{{ app_db_user }}"
         state: present
 
+    - name: Create per-app roles
+      become_user: postgres
+      community.postgresql.postgresql_user:
+        name: "{{ item.user }}"
+        password: "{{ lookup('env', item.password_env) }}"
+        state: present
+      loop: "{{ extra_app_dbs }}"
+      no_log: true
+
+    - name: Create per-app databases
+      become_user: postgres
+      community.postgresql.postgresql_db:
+        name: "{{ item.name }}"
+        owner: "{{ item.user }}"
+        state: present
+      loop: "{{ extra_app_dbs }}"
+
   handlers:
     - name: restart postgres
       ansible.builtin.service:
@@ -88,6 +116,9 @@
     app_db_user: appuser
     app_db_password: "{{ lookup('env', 'POSTGRES_APP_PASSWORD') }}"
     db_host_ip: "{{ hostvars['db1'].ansible_host }}"
+    # Keep in sync with the same var in the play above.
+    extra_app_dbs:
+      - { name: openwebui, user: openwebui, password_env: OPENWEBUI_DB_PASSWORD }
 
   tasks:
     - name: Create prod namespace
@@ -129,6 +160,20 @@
           --from-literal=POSTGRES_PASSWORD={{ app_db_password }} \
           --from-literal=DATABASE_URL=postgres://{{ app_db_user }}:{{ app_db_password }}@{{ db_host_ip }}:5432/{{ app_db_name }} \
           --dry-run=client -o yaml | kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      no_log: true
+      changed_when: false
+
+    - name: Apply per-app Postgres credentials Secrets
+      ansible.builtin.shell: |
+        kubectl --kubeconfig={{ kubeconfig }} -n prod create secret generic {{ item.name }}-db \
+          --from-literal=POSTGRES_HOST={{ db_host_ip }} \
+          --from-literal=POSTGRES_PORT=5432 \
+          --from-literal=POSTGRES_DB={{ item.name }} \
+          --from-literal=POSTGRES_USER={{ item.user }} \
+          --from-literal=POSTGRES_PASSWORD={{ lookup('env', item.password_env) }} \
+          --from-literal=DATABASE_URL=postgres://{{ item.user }}:{{ lookup('env', item.password_env) }}@{{ db_host_ip }}:5432/{{ item.name }} \
+          --dry-run=client -o yaml | kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      loop: "{{ extra_app_dbs }}"
       no_log: true
       changed_when: false
 

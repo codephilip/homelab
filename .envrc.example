@@ -13,6 +13,11 @@ export TAILSCALE_AUTHKEY=''
 # Postgres app-user password. Generate with: openssl rand -base64 24
 export POSTGRES_APP_PASSWORD=''
 
+# Per-app Postgres passwords. Each app gets its own DB+user on db1, exposed
+# in k8s as a Secret named "<app>-db" (e.g. openwebui-db). Generate each with:
+#   openssl rand -base64 24
+export OPENWEBUI_DB_PASSWORD=''
+
 # Real email — Let's Encrypt uses this for cert expiry warnings
 export LETSENCRYPT_EMAIL=''
 
@@ -22,6 +27,15 @@ export RESTIC_PASSWORD=''
 
 # Grafana admin login. Generate with: openssl rand -base64 18
 export GRAFANA_ADMIN_PASSWORD=''
+
+# Resend API key for outbound alert emails. Get one at https://resend.com.
+# Used by ansible/observability.yml to wire Grafana SMTP -> smtp.resend.com.
+export RESEND_API_KEY=''
+# Sender address. Must be a verified domain in Resend, OR use Resend's
+# sandbox onboarding@resend.dev until your domain is verified.
+export ALERT_EMAIL_FROM='onboarding@resend.dev'
+# Where alert emails land.
+export ALERT_EMAIL_TO=''
 
 # GitHub PAT with "Administration: Read and write" on the target repo(s).
 # Used once by ansible/ci.yml to fetch a runner registration token.

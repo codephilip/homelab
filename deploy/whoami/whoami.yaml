@@ -1,6 +1,6 @@
 # Test app — proves the whole pipeline (k3s → Traefik → Ingress).
 # Hostname uses nip.io so we don't need a real DNS record:
-#   whoami.10.10.20.120.nip.io  →  10.10.20.120 (k3s-w1)
+#   whoami.10.0.0.120.nip.io  →  10.0.0.120 (k3s-w1)
 # To get TLS via Let's Encrypt later, swap the host for a real domain
 # whose A record points at your public IP, and uncomment the TLS section.
 
@@ -54,7 +54,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: whoami.10.10.20.120.nip.io
+    - host: whoami.10.0.0.120.nip.io
       http:
         paths:
           - path: /

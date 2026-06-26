@@ -1,0 +1,24 @@
+# Teach k3s CoreDNS to resolve `.lab` names by forwarding those queries
+# to AdGuard Home (util1 — see ansible/inventory.yml). Without this, pods get NXDOMAIN for
+# anything `.lab` — so any in-cluster app that calls grafana.lab,
+# prox-1.lab, ollama.lab, etc. (e.g. the Homepage dashboard's
+# siteMonitor checks) fails.
+#
+# How it plugs in: k3s ships a CoreDNS Corefile that ends with
+#   import /etc/coredns/custom/*.server
+# and mounts the optional `coredns-custom` ConfigMap at that path.
+# Each key here becomes a file there; `*.server` files are imported
+# as additional CoreDNS server blocks.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  lab.server: |
+    lab:53 {
+        errors
+        cache 30
+        forward . 10.0.0.132
+    }
